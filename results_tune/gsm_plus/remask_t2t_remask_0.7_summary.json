@@ -1,0 +1,22 @@
+{
+  "benchmark": "gsm_plus",
+  "tag": "remask_t2t_remask_0.7",
+  "mode": "remask",
+  "accuracy": 0.7,
+  "correct": 35,
+  "total": 50,
+  "time_s": 581.0414533615112,
+  "gen_length": 512,
+  "block_length": 32,
+  "steps": 32,
+  "threshold": 0.7,
+  "editing_threshold": 0.5,
+  "temperature": 0.0,
+  "strategy": "t2t_remask",
+  "remask_threshold": 0.7,
+  "max_remask_ratio": 0.25,
+  "max_remask_per_pos": null,
+  "batch_size": 1,
+  "shard_id": null,
+  "num_shards": null
+}

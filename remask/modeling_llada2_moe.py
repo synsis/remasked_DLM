@@ -19,6 +19,7 @@
 """PyTorch LLaDA2MoE model."""
 
 import math
+import time
 from typing import List, Callable, Optional, Tuple, Union
 
 import torch
@@ -1275,6 +1276,8 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
 
     def _forward_block(self, block_ids, block_pos, block_attn, kv_cache, block_length):
         """Forward only the current block, compute logits only for block tokens."""
+        if hasattr(self, '_gen_forward_count'):
+            self._gen_forward_count += 1
         model_out = self.model(
             block_ids,
             attention_mask=block_attn,
@@ -1312,6 +1315,8 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
         2. lm_head only on current block positions (not entire sequence)
         3. EOS-aware early stop inside inner loop (skips unnecessary post-steps)
         """
+        self._gen_forward_count = 0
+        _gen_t0 = time.time()
         steps = min(steps, gen_length // minimal_topk)
         input_ids = inputs.to(self.device)
 
@@ -1454,9 +1459,21 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
         ).nonzero(as_tuple=True)[0]
         first_eos = eos_positions[0].item() if len(eos_positions) > 0 else gen_length
 
-        return generated_answer[
+        result = generated_answer[
             :, input_ids.shape[1] : input_ids.shape[1] + first_eos + 1
         ]
+
+        _out_len = result.shape[1]
+        _wall = time.time() - _gen_t0
+        _fwd = self._gen_forward_count
+        self._gen_stats = {
+            'forward_passes': _fwd,
+            'output_tokens': _out_len,
+            'tpf': _out_len / max(1, _fwd),
+            'wall_time_s': _wall,
+            'tps': _out_len / max(1e-9, _wall),
+        }
+        return result
 
     @torch.inference_mode()
     def generate_batch(
@@ -1499,6 +1516,8 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
                 num_to_transfer=num_to_transfer,
             )]
 
+        self._gen_forward_count = 0
+        _gen_t0 = time.time()
         steps = min(steps, gen_length // minimal_topk)
 
         prompt_lengths = [inp.shape[1] for inp in inputs_list]
@@ -1674,4 +1693,17 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
             end = eos_pos[0].item() + 1 if len(eos_pos) > 0 else gen_length
             results.append(x[i, plen : plen + end].unsqueeze(0))
 
+        _total_tokens = sum(r.shape[1] for r in results)
+        _avg_tokens = _total_tokens / len(results) if results else 0
+        _wall = time.time() - _gen_t0
+        _fwd = self._gen_forward_count
+        self._gen_stats = {
+            'forward_passes': _fwd,
+            'output_tokens': _avg_tokens,
+            'total_output_tokens': _total_tokens,
+            'batch_size': batch_size,
+            'tpf': _avg_tokens / max(1, _fwd),
+            'wall_time_s': _wall,
+            'tps': _total_tokens / max(1e-9, _wall),
+        }
         return results

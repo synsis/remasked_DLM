@@ -22,7 +22,7 @@ from remask.utils import (
     compute_f1,
     max_metric_over_answers,
 )
-from eval.common import add_parallel_args, shard_dataset
+from eval.common import add_parallel_args, shard_dataset, _attach_gen_stats, aggregate_gen_stats
 
 PROMPT_TPL = (
     "Read the context and answer the question. If unanswerable, say 'unanswerable'.\n\n"
@@ -110,9 +110,11 @@ def run(args):
         f1 = squad2_f1_score(resp, gold_texts)
         sum_f1 += f1
         total += 1
-        results.append(dict(
+        r = dict(
             context=context, question=question, gold=gold_texts,
-            predicted=extract_short_answer(resp), f1=f1, response=resp))
+            predicted=extract_short_answer(resp), f1=f1, response=resp)
+        _attach_gen_stats(r, model)
+        results.append(r)
         if (i + 1) % 50 == 0:
             print(f"  [{i+1}] F1={sum_f1/total:.4f}")
 
@@ -124,12 +126,15 @@ def run(args):
     with open(out_path, "w") as f:
         for r in results:
             f.write(json.dumps(r) + "\n")
+    gen_agg = aggregate_gen_stats(results)
     with open(os.path.join(args.output_dir, f"{tag}{shard_sfx}_summary.json"), "w") as f:
-        json.dump(dict(
+        summary = dict(
             benchmark="squad2", tag=tag, mode=args.mode,
             strategy=args.strategy, remask_threshold=args.remask_threshold,
             main_metric="f1", f1=avg_f1,
-            correct=perfect_f1, total=total, time_s=elapsed), f, indent=2)
+            correct=perfect_f1, total=total, time_s=elapsed)
+        summary.update(gen_agg)
+        json.dump(summary, f, indent=2)
 
 
 if __name__ == "__main__":

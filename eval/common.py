@@ -8,6 +8,47 @@ from tqdm import tqdm
 from remask.utils import format_chat_prompt, tokenize_prompt
 
 
+def get_gen_stats(model):
+    """Return the last generation stats dict from model, or empty dict."""
+    return getattr(model, '_gen_stats', {}) or {}
+
+
+def _attach_gen_stats(r, model):
+    """Attach per-sample generation stats from model._gen_stats to result dict."""
+    stats = get_gen_stats(model)
+    if stats:
+        r['_tpf'] = stats.get('tpf')
+        r['_tps'] = stats.get('tps')
+        r['_forward_passes'] = stats.get('forward_passes')
+        r['_output_tokens'] = stats.get('output_tokens')
+        if 'remask_total' in stats:
+            r['_remask_total'] = stats['remask_total']
+
+
+def aggregate_gen_stats(results):
+    """Aggregate _tpf/_tps/etc. across results into summary averages."""
+    tpfs = [r['_tpf'] for r in results if r.get('_tpf') is not None]
+    tpss = [r['_tps'] for r in results if r.get('_tps') is not None]
+    fwds = [r['_forward_passes'] for r in results if r.get('_forward_passes') is not None]
+    toks = [r['_output_tokens'] for r in results if r.get('_output_tokens') is not None]
+    remasks = [r['_remask_total'] for r in results if r.get('_remask_total') is not None]
+    agg = {}
+    if tpfs:
+        agg['avg_tpf'] = sum(tpfs) / len(tpfs)
+    if tpss:
+        agg['avg_tps'] = sum(tpss) / len(tpss)
+    if fwds:
+        agg['avg_forward_passes'] = sum(fwds) / len(fwds)
+        agg['total_forward_passes'] = sum(fwds)
+    if toks:
+        agg['avg_output_tokens'] = sum(toks) / len(toks)
+        agg['total_output_tokens'] = sum(toks)
+    if remasks:
+        agg['avg_remask_total'] = sum(remasks) / len(remasks)
+        agg['total_remask'] = sum(remasks)
+    return agg
+
+
 def add_parallel_args(parser):
     """Add --batch_size, --shard_id, --num_shards to an argparse parser."""
     parser.add_argument(
@@ -100,17 +141,17 @@ def run_eval(
     with open(results_path, "w") as f:
         for r in results:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    gen_agg = aggregate_gen_stats(results)
     with open(summary_path, "w") as f:
-        json.dump(
-            dict(
-                benchmark=benchmark, tag=tag, mode=getattr(args, "mode", None),
-                strategy=getattr(args, "strategy", None),
-                remask_threshold=getattr(args, "remask_threshold", None),
-                accuracy=acc, correct=correct, total=total,
-                time_s=elapsed, batch_size=batch_size,
-            ),
-            f, indent=2,
+        summary = dict(
+            benchmark=benchmark, tag=tag, mode=getattr(args, "mode", None),
+            strategy=getattr(args, "strategy", None),
+            remask_threshold=getattr(args, "remask_threshold", None),
+            accuracy=acc, correct=correct, total=total,
+            time_s=elapsed, batch_size=batch_size,
         )
+        summary.update(gen_agg)
+        json.dump(summary, f, indent=2)
     return results, acc
 
 
@@ -121,8 +162,11 @@ def _process_one(model, tokenizer, ex, gkw, format_prompt_fn, evaluate_fn, make_
     resp = tokenizer.decode(out[0], skip_special_tokens=True)
     ev = evaluate_fn(resp, ex)
     if make_result_fn:
-        return make_result_fn(ex, ev, resp)
-    return {**ev, "response": resp}
+        r = make_result_fn(ex, ev, resp)
+    else:
+        r = {**ev, "response": resp}
+    _attach_gen_stats(r, model)
+    return r
 
 
 def _run_sequential(model, tokenizer, examples, gkw, results,
@@ -150,11 +194,19 @@ def _run_batched(model, tokenizer, examples, batch_size, gkw, results,
             prompts_ids.append(tokenize_prompt(prompt_text, tokenizer, model.device))
 
         outputs = model.generate_batch(inputs_list=prompts_ids, **gkw)
+        batch_stats = get_gen_stats(model)
 
         for out, ex in zip(outputs, batch_ex):
             resp = tokenizer.decode(out[0], skip_special_tokens=True)
             ev = evaluate_fn(resp, ex)
             r = make_result_fn(ex, ev, resp) if make_result_fn else {**ev, "response": resp}
+            if batch_stats:
+                r['_tpf'] = batch_stats.get('tpf')
+                r['_tps'] = batch_stats.get('tps')
+                r['_forward_passes'] = batch_stats.get('forward_passes')
+                r['_output_tokens'] = batch_stats.get('output_tokens')
+                if 'remask_total' in batch_stats:
+                    r['_remask_total'] = batch_stats['remask_total']
             correct += r.get("correct", False)
             total += 1
             results.append(r)

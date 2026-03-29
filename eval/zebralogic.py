@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 from remask import load_remask_model, load_original_model
 from remask.utils import format_chat_prompt, tokenize_prompt, extract_short_answer
-from eval.common import add_parallel_args, shard_dataset
+from eval.common import add_parallel_args, shard_dataset, _attach_gen_stats, aggregate_gen_stats
 
 
 PROMPT_TPL = (
@@ -105,8 +105,10 @@ def run(args):
         ok = bool(gold) and (gold.lower() in pred.lower() or pred.strip() == gold.strip())
         correct += int(ok)
         total += 1
-        results.append(dict(puzzle=puzzle[:2000], gold=gold, predicted=pred,
-                            correct=bool(ok), response=resp))
+        r = dict(puzzle=puzzle[:2000], gold=gold, predicted=pred,
+                 correct=bool(ok), response=resp)
+        _attach_gen_stats(r, model)
+        results.append(r)
         if (i + 1) % 50 == 0:
             print(f"  [{i+1}] acc={correct}/{total}={correct/total:.4f}")
 
@@ -117,12 +119,15 @@ def run(args):
     with open(out_path, "w") as f:
         for r in results:
             f.write(json.dumps(r) + "\n")
+    gen_agg = aggregate_gen_stats(results)
     with open(os.path.join(args.output_dir, f"{tag}{shard_sfx}_summary.json"), "w") as f:
-        json.dump(dict(
+        summary = dict(
             benchmark="zebralogic", split=split_name, tag=tag, mode=args.mode,
             strategy=args.strategy, remask_threshold=args.remask_threshold,
             main_metric="accuracy", accuracy=acc, correct=correct, total=total,
-            time_s=elapsed), f, indent=2)
+            time_s=elapsed)
+        summary.update(gen_agg)
+        json.dump(summary, f, indent=2)
 
 
 if __name__ == "__main__":

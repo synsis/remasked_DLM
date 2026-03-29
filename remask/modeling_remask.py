@@ -170,6 +170,8 @@ class LLaDA2MoeRemaskLM(LLaDA2MoeModelLM):
         if remask.any():
             cur_x[0, -block_length:][remask] = mask_id
             remask_counts[remask] += 1
+            if hasattr(self, '_gen_remask_total'):
+                self._gen_remask_total += remask.sum().item()
 
         return not remask.any()
 
@@ -197,12 +199,23 @@ class LLaDA2MoeRemaskLM(LLaDA2MoeModelLM):
             self._remask_counts = None
             self._prev_logits = None
 
+    def generate(self, *args, **kwargs):
+        self._gen_remask_total = 0
+        result = super().generate(*args, **kwargs)
+        if hasattr(self, '_gen_stats'):
+            self._gen_stats['remask_total'] = self._gen_remask_total
+        return result
+
     def generate_batch(self, inputs_list, **kwargs):
         """Override to reset batch state before and after."""
         self._batch_prev_logits = {}
         self._batch_remask_counts = {}
+        self._gen_remask_total = 0
         try:
-            return super().generate_batch(inputs_list, **kwargs)
+            result = super().generate_batch(inputs_list, **kwargs)
+            if hasattr(self, '_gen_stats'):
+                self._gen_stats['remask_total'] = self._gen_remask_total
+            return result
         finally:
             self._batch_prev_logits = {}
             self._batch_remask_counts = {}

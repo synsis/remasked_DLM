@@ -18,6 +18,7 @@ from tqdm import tqdm
 
 from remask import load_remask_model, load_original_model
 from remask.utils import format_chat_prompt, tokenize_prompt, extract_math_answer, normalize_numeric
+from eval.common import _attach_gen_stats, aggregate_gen_stats, get_gen_stats
 
 GSM_PLUS_PROMPT = (
     "Solve the following math problem step by step. "
@@ -100,7 +101,9 @@ def run(args):
     total = len(results)
     elapsed = time.time() - t0
     acc = correct / total if total else 0
-    print(f"\nGSM-Plus [{tag}] {correct}/{total} = {acc:.4f}  ({elapsed:.0f}s)")
+    gen_agg = aggregate_gen_stats(results)
+    _tpf_str = f"  TPF={gen_agg['avg_tpf']:.2f}" if 'avg_tpf' in gen_agg else ""
+    print(f"\nGSM-Plus [{tag}] {correct}/{total} = {acc:.4f}  ({elapsed:.0f}s){_tpf_str}")
 
     with open(out_path, "w") as f:
         for r in results:
@@ -108,33 +111,31 @@ def run(args):
     summary_path = os.path.join(
         args.output_dir, f"{tag}{shard_suffix}_summary.json",
     )
+    summary = dict(
+        benchmark="gsm_plus",
+        tag=tag,
+        mode=args.mode,
+        accuracy=acc,
+        correct=correct,
+        total=total,
+        time_s=elapsed,
+        gen_length=args.gen_length,
+        block_length=args.block_length,
+        steps=args.steps,
+        threshold=args.threshold,
+        editing_threshold=args.editing_threshold,
+        temperature=args.temperature,
+        strategy=args.strategy,
+        remask_threshold=args.remask_threshold,
+        max_remask_ratio=getattr(args, 'max_remask_ratio', None),
+        max_remask_per_pos=getattr(args, 'max_remask_per_pos', None),
+        batch_size=batch_size,
+        shard_id=args.shard_id if args.num_shards > 1 else None,
+        num_shards=args.num_shards if args.num_shards > 1 else None,
+    )
+    summary.update(gen_agg)
     with open(summary_path, "w") as f:
-        json.dump(
-            dict(
-                benchmark="gsm_plus",
-                tag=tag,
-                mode=args.mode,
-                accuracy=acc,
-                correct=correct,
-                total=total,
-                time_s=elapsed,
-                gen_length=args.gen_length,
-                block_length=args.block_length,
-                steps=args.steps,
-                threshold=args.threshold,
-                editing_threshold=args.editing_threshold,
-                temperature=args.temperature,
-                strategy=args.strategy,
-                remask_threshold=args.remask_threshold,
-                max_remask_ratio=getattr(args, 'max_remask_ratio', None),
-                max_remask_per_pos=getattr(args, 'max_remask_per_pos', None),
-                batch_size=batch_size,
-                shard_id=args.shard_id if args.num_shards > 1 else None,
-                num_shards=args.num_shards if args.num_shards > 1 else None,
-            ),
-            f,
-            indent=2,
-        )
+        json.dump(summary, f, indent=2)
 
 
 def _run_sequential(model, tokenizer, dataset, gkw, results, args, tag):
@@ -152,15 +153,15 @@ def _run_sequential(model, tokenizer, dataset, gkw, results, args, tag):
         ok = normalize_numeric(pred) == normalize_numeric(gold)
         correct += ok
         total += 1
-        results.append(
-            dict(
-                question=ex["question"],
-                gold=gold,
-                predicted=pred,
-                correct=ok,
-                response=resp,
-            )
+        r = dict(
+            question=ex["question"],
+            gold=gold,
+            predicted=pred,
+            correct=ok,
+            response=resp,
         )
+        _attach_gen_stats(r, model)
+        results.append(r)
         if (i + 1) % 50 == 0:
             print(f"  [{i+1}] acc={correct}/{total}={correct/total:.4f}")
 
@@ -180,6 +181,7 @@ def _run_batched(model, tokenizer, dataset, batch_size, gkw, results, args, tag)
             prompts_ids.append(tokenize_prompt(prompt, tokenizer, model.device))
 
         outputs = model.generate_batch(inputs_list=prompts_ids, **gkw)
+        batch_stats = get_gen_stats(model)
 
         for j, (out, gold, ex) in enumerate(zip(outputs, golds, batch_ex)):
             resp = tokenizer.decode(out[0], skip_special_tokens=True)
@@ -187,15 +189,21 @@ def _run_batched(model, tokenizer, dataset, batch_size, gkw, results, args, tag)
             ok = normalize_numeric(pred) == normalize_numeric(gold)
             correct += ok
             total += 1
-            results.append(
-                dict(
-                    question=ex["question"],
-                    gold=gold,
-                    predicted=pred,
-                    correct=ok,
-                    response=resp,
-                )
+            r = dict(
+                question=ex["question"],
+                gold=gold,
+                predicted=pred,
+                correct=ok,
+                response=resp,
             )
+            if batch_stats:
+                r['_tpf'] = batch_stats.get('tpf')
+                r['_tps'] = batch_stats.get('tps')
+                r['_forward_passes'] = batch_stats.get('forward_passes')
+                r['_output_tokens'] = batch_stats.get('output_tokens')
+                if 'remask_total' in batch_stats:
+                    r['_remask_total'] = batch_stats['remask_total']
+            results.append(r)
 
         if total > 0 and total % 50 < batch_size:
             print(f"  [{total}] acc={correct}/{total}={correct/total:.4f}")

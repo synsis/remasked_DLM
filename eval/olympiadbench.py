@@ -21,7 +21,7 @@ from remask.utils import (
     extract_math_answer,
     normalize_math_answer,
 )
-from eval.common import add_parallel_args, shard_dataset
+from eval.common import add_parallel_args, shard_dataset, _attach_gen_stats, aggregate_gen_stats
 
 OLYMPIAD_PROMPT = (
     "Solve the following olympiad math problem step by step. "
@@ -118,9 +118,9 @@ def run(args):
         ok = normalize_math_answer(pred) == normalize_math_answer(gold)
         correct += ok
         total += 1
-        results.append(
-            dict(problem=prob, gold=gold, predicted=pred, correct=ok, response=resp)
-        )
+        r = dict(problem=prob, gold=gold, predicted=pred, correct=ok, response=resp)
+        _attach_gen_stats(r, model)
+        results.append(r)
         if (i + 1) % 50 == 0:
             print(f"  [{i+1}] acc={correct}/{total}={correct/total:.4f}")
 
@@ -131,23 +131,22 @@ def run(args):
     with open(out_path, "w") as f:
         for r in results:
             f.write(json.dumps(r) + "\n")
+    gen_agg = aggregate_gen_stats(results)
     with open(os.path.join(args.output_dir, f"{tag}{shard_sfx}_summary.json"), "w") as f:
-        json.dump(
-            dict(
-                benchmark="olympiadbench",
-                tag=tag,
-                mode=args.mode,
-                strategy=args.strategy,
-                remask_threshold=args.remask_threshold,
-                hub_source=src,
-                accuracy=acc,
-                correct=correct,
-                total=total,
-                time_s=elapsed,
-            ),
-            f,
-            indent=2,
+        summary = dict(
+            benchmark="olympiadbench",
+            tag=tag,
+            mode=args.mode,
+            strategy=args.strategy,
+            remask_threshold=args.remask_threshold,
+            hub_source=src,
+            accuracy=acc,
+            correct=correct,
+            total=total,
+            time_s=elapsed,
         )
+        summary.update(gen_agg)
+        json.dump(summary, f, indent=2)
 
 
 if __name__ == "__main__":

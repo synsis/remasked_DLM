@@ -16,7 +16,7 @@ from tqdm import tqdm
 
 from remask import load_remask_model, load_original_model
 from remask.utils import format_chat_prompt, tokenize_prompt
-from eval.common import add_parallel_args, shard_dataset
+from eval.common import add_parallel_args, shard_dataset, _attach_gen_stats, aggregate_gen_stats
 
 
 def load_prontoqa():
@@ -103,8 +103,10 @@ def run(args):
         ok = pred == gold
         correct += ok
         total += 1
-        results.append(dict(
-            question=question, gold=gold, predicted=pred, correct=ok, response=resp))
+        r = dict(
+            question=question, gold=gold, predicted=pred, correct=ok, response=resp)
+        _attach_gen_stats(r, model)
+        results.append(r)
         if (i + 1) % 50 == 0:
             print(f"  [{i+1}] acc={correct}/{total}={correct/total:.4f}")
 
@@ -115,10 +117,13 @@ def run(args):
     with open(out_path, "w") as f:
         for r in results:
             f.write(json.dumps(r) + "\n")
+    gen_agg = aggregate_gen_stats(results)
     with open(os.path.join(args.output_dir, f"{tag}{shard_sfx}_summary.json"), "w") as f:
-        json.dump(dict(benchmark="prontoqa", tag=tag, mode=args.mode,
+        summary = dict(benchmark="prontoqa", tag=tag, mode=args.mode,
                        strategy=args.strategy, remask_threshold=args.remask_threshold,
-                       accuracy=acc, correct=correct, total=total, time_s=elapsed), f, indent=2)
+                       accuracy=acc, correct=correct, total=total, time_s=elapsed)
+        summary.update(gen_agg)
+        json.dump(summary, f, indent=2)
 
 
 if __name__ == "__main__":

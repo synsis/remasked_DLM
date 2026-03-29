@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 from remask import load_remask_model, load_original_model
 from remask.utils import format_chat_prompt, tokenize_prompt, extract_choice_answer
-from eval.common import add_parallel_args, shard_dataset
+from eval.common import add_parallel_args, shard_dataset, _attach_gen_stats, aggregate_gen_stats
 
 
 def load_musr_split():
@@ -121,9 +121,11 @@ def run(args):
         ok = score_musr(resp, gold, has_mc, n_ch)
         correct += int(ok)
         total += 1
-        results.append(dict(
+        r = dict(
             gold=gold, predicted=extract_choice_answer(resp, n_choices=n_ch) if has_mc else resp[:500],
-            correct=bool(ok), response=resp))
+            correct=bool(ok), response=resp)
+        _attach_gen_stats(r, model)
+        results.append(r)
         if (i + 1) % 50 == 0:
             print(f"  [{i+1}] acc={correct}/{total}={correct/total:.4f}")
 
@@ -134,12 +136,15 @@ def run(args):
     with open(out_path, "w") as f:
         for r in results:
             f.write(json.dumps(r) + "\n")
+    gen_agg = aggregate_gen_stats(results)
     with open(os.path.join(args.output_dir, f"{tag}{shard_sfx}_summary.json"), "w") as f:
-        json.dump(dict(
+        summary = dict(
             benchmark="musr", tag=tag, mode=args.mode,
             strategy=args.strategy, remask_threshold=args.remask_threshold,
             main_metric="accuracy", accuracy=acc, correct=correct, total=total,
-            time_s=elapsed), f, indent=2)
+            time_s=elapsed)
+        summary.update(gen_agg)
+        json.dump(summary, f, indent=2)
 
 
 if __name__ == "__main__":

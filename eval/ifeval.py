@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 from remask import load_remask_model, load_original_model
 from remask.utils import format_chat_prompt, tokenize_prompt
-from eval.common import add_parallel_args, shard_dataset
+from eval.common import add_parallel_args, shard_dataset, _attach_gen_stats, aggregate_gen_stats
 
 
 def load_ifeval_split():
@@ -69,12 +69,14 @@ def run(args):
         )
         resp = tokenizer.decode(out[0], skip_special_tokens=True)
         total += 1
-        results.append(dict(
+        r = dict(
             prompt=user,
             instruction_id_list=ex.get("instruction_id_list"),
             kwargs=ex.get("kwargs"),
             response=resp,
-        ))
+        )
+        _attach_gen_stats(r, model)
+        results.append(r)
         if (i + 1) % 50 == 0:
             print(f"  [{i+1}] saved={total}")
 
@@ -85,14 +87,16 @@ def run(args):
     with open(out_path, "w") as f:
         for r in results:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    gen_agg = aggregate_gen_stats(results)
     with open(os.path.join(args.output_dir, f"{tag}{shard_sfx}_summary.json"), "w") as f:
-        json.dump(dict(
+        summary = dict(
             benchmark="ifeval", tag=tag, mode=args.mode,
             strategy=args.strategy, remask_threshold=args.remask_threshold,
             main_metric="offline_ifeval_scorer",
             correct=None, total=total, time_s=elapsed,
-            note="Run official IFEval scorer on results jsonl for metrics."),
-                  f, ensure_ascii=False, indent=2)
+            note="Run official IFEval scorer on results jsonl for metrics.")
+        summary.update(gen_agg)
+        json.dump(summary, f, ensure_ascii=False, indent=2)
 
 
 if __name__ == "__main__":
