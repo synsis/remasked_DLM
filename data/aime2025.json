@@ -1,0 +1,41 @@
+[
+  {
+    "problem": "Find the sum of all integer bases b > 9 for which 17_b is a divisor of 97_b.",
+    "answer": "70"
+  },
+  {
+    "problem": "An urn contains 4 green balls and 6 blue balls. A second urn contains 16 green balls and N blue balls. A single ball is drawn at random from each urn. The probability that both balls are of the same color is 0.58. Find N.",
+    "answer": "144"
+  },
+  {
+    "problem": "Nine members of a baseball team went to an ice-cream parlor after their game. Each player had a single-scoop cone of chocolate, vanilla, or strawberry ice cream. At least one player chose each flavor, and the number of players who chose chocolate was greater than the number of players who chose vanilla, which was greater than the number of players who chose strawberry. Let N be the number of different assignments of flavors to players that meet these conditions. Find the remainder when N is divided by 1000.",
+    "answer": "16"
+  },
+  {"problem": "[TBD: AIME 2025 problem 4 — replace with official text]", "answer": "TBD"},
+  {"problem": "[TBD: AIME 2025 problem 5 — replace with official text]", "answer": "TBD"},
+  {"problem": "[TBD: AIME 2025 problem 6 — replace with official text]", "answer": "TBD"},
+  {"problem": "[TBD: AIME 2025 problem 7 — replace with official text]", "answer": "TBD"},
+  {"problem": "[TBD: AIME 2025 problem 8 — replace with official text]", "answer": "TBD"},
+  {"problem": "[TBD: AIME 2025 problem 9 — replace with official text]", "answer": "TBD"},
+  {"problem": "[TBD: AIME 2025 problem 10 — replace with official text]", "answer": "TBD"},
+  {"problem": "[TBD: AIME 2025 problem 11 — replace with official text]", "answer": "TBD"},
+  {"problem": "[TBD: AIME 2025 problem 12 — replace with official text]", "answer": "TBD"},
+  {"problem": "[TBD: AIME 2025 problem 13 — replace with official text]", "answer": "TBD"},
+  {"problem": "[TBD: AIME 2025 problem 14 — replace with official text]", "answer": "TBD"},
+  {"problem": "[TBD: AIME 2025 problem 15 — replace with official text]", "answer": "TBD"},
+  {"problem": "[TBD: AIME 2025 problem 16 — replace with official text]", "answer": "TBD"},
+  {"problem": "[TBD: AIME 2025 problem 17 — replace with official text]", "answer": "TBD"},
+  {"problem": "[TBD: AIME 2025 problem 18 — replace with official text]", "answer": "TBD"},
+  {"problem": "[TBD: AIME 2025 problem 19 — replace with official text]", "answer": "TBD"},
+  {"problem": "[TBD: AIME 2025 problem 20 — replace with official text]", "answer": "TBD"},
+  {"problem": "[TBD: AIME 2025 problem 21 — replace with official text]", "answer": "TBD"},
+  {"problem": "[TBD: AIME 2025 problem 22 — replace with official text]", "answer": "TBD"},
+  {"problem": "[TBD: AIME 2025 problem 23 — replace with official text]", "answer": "TBD"},
+  {"problem": "[TBD: AIME 2025 problem 24 — replace with official text]", "answer": "TBD"},
+  {"problem": "[TBD: AIME 2025 problem 25 — replace with official text]", "answer": "TBD"},
+  {"problem": "[TBD: AIME 2025 problem 26 — replace with official text]", "answer": "TBD"},
+  {"problem": "[TBD: AIME 2025 problem 27 — replace with official text]", "answer": "TBD"},
+  {"problem": "[TBD: AIME 2025 problem 28 — replace with official text]", "answer": "TBD"},
+  {"problem": "[TBD: AIME 2025 problem 29 — replace with official text]", "answer": "TBD"},
+  {"problem": "[TBD: AIME 2025 problem 30 — replace with official text]", "answer": "TBD"}
+]

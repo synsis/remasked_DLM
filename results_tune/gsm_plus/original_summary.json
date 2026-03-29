@@ -1,0 +1,11 @@
+{
+  "benchmark": "gsm_plus",
+  "tag": "original",
+  "mode": "original",
+  "strategy": "low_prob",
+  "remask_threshold": null,
+  "accuracy": 0.65,
+  "correct": 13,
+  "total": 20,
+  "time_s": 1036.2760918140411
+}

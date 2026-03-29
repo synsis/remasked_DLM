@@ -1,0 +1,11 @@
+{
+  "benchmark": "cmath",
+  "tag": "original",
+  "mode": "original",
+  "strategy": "low_prob",
+  "remask_threshold": null,
+  "accuracy": 1.0,
+  "correct": 20,
+  "total": 20,
+  "time_s": 325.56019353866577
+}

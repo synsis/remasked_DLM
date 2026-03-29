@@ -1,0 +1,6 @@
+torch>=2.1.0
+transformers>=4.57.0
+accelerate
+datasets
+evalplus
+tqdm
