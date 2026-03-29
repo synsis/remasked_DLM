@@ -17,9 +17,11 @@ from remask.utils import format_chat_prompt, tokenize_prompt, extract_math_answe
 from eval.common import add_parallel_args, shard_dataset, _attach_gen_stats, aggregate_gen_stats
 
 AIME_PROMPT = (
-    "Solve the following competition math problem. Show detailed work, "
-    "then put your final integer answer after ####.\n\n"
-    "Problem: {problem}"
+    "Solve the following math problem step by step. The last line of your "
+    "response should be of the form Answer: $ANSWER (without quotes) where "
+    "$ANSWER is the answer to the problem.\n\n"
+    "{problem}\n\n"
+    "Remember to put your answer on its own line after \"Answer:\"."
 )
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -66,10 +68,12 @@ def run(args):
     os.makedirs(args.output_dir, exist_ok=True)
     shard_sfx = f"_shard{args.shard_id}" if args.num_shards > 1 else ""
     out_path = os.path.join(args.output_dir, f"{tag}{shard_sfx}_results.jsonl")
+    summary_path = os.path.join(args.output_dir, f"{tag}{shard_sfx}_summary.json")
     correct = total = 0
     results = []
     t0 = time.time()
 
+    fout = open(out_path, "w")
     for i, ex in enumerate(tqdm(problems, desc=f"AIME2025 [{tag}]")):
         gold = str(ex["answer"]).strip()
         prob = ex["problem"]
@@ -95,32 +99,31 @@ def run(args):
         r = dict(problem=prob, gold=gold, predicted=pred, correct=ok, response=resp)
         _attach_gen_stats(r, model)
         results.append(r)
-        if (i + 1) % 50 == 0:
-            print(f"  [{i+1}] acc={correct}/{total}={correct/total:.4f}")
+
+        fout.write(json.dumps(r, ensure_ascii=False) + "\n")
+        fout.flush()
+
+        if total % 5 == 0 or total == len(problems):
+            elapsed = time.time() - t0
+            acc = correct / total if total else 0
+            gen_agg = aggregate_gen_stats(results)
+            with open(summary_path, "w") as fs:
+                summary = dict(
+                    benchmark="aime2025", tag=tag, mode=args.mode,
+                    strategy=args.strategy,
+                    remask_threshold=args.remask_threshold,
+                    data_path=_DEFAULT_DATA,
+                    accuracy=acc, correct=correct, total=total,
+                    time_s=elapsed, done=(total == len(problems)),
+                )
+                summary.update(gen_agg)
+                json.dump(summary, fs, indent=2)
+            print(f"  [{total}/{len(problems)}] acc={correct}/{total}={acc:.4f}")
+    fout.close()
 
     elapsed = time.time() - t0
     acc = correct / total if total else 0
     print(f"\nAIME2025 [{tag}] {correct}/{total} = {acc:.4f}  ({elapsed:.0f}s)")
-
-    with open(out_path, "w") as f:
-        for r in results:
-            f.write(json.dumps(r) + "\n")
-    gen_agg = aggregate_gen_stats(results)
-    with open(os.path.join(args.output_dir, f"{tag}{shard_sfx}_summary.json"), "w") as f:
-        summary = dict(
-            benchmark="aime2025",
-            tag=tag,
-            mode=args.mode,
-            strategy=args.strategy,
-            remask_threshold=args.remask_threshold,
-            data_path=_DEFAULT_DATA,
-            accuracy=acc,
-            correct=correct,
-            total=total,
-            time_s=elapsed,
-        )
-        summary.update(gen_agg)
-        json.dump(summary, f, indent=2)
 
 
 if __name__ == "__main__":
@@ -134,7 +137,7 @@ if __name__ == "__main__":
     )
     p.add_argument("--remask_threshold", type=float, default=None)
     p.add_argument("--output_dir", default="results/aime2025")
-    p.add_argument("--gen_length", type=int, default=1024)
+    p.add_argument("--gen_length", type=int, default=16384)
     p.add_argument("--block_length", type=int, default=32)
     p.add_argument("--steps", type=int, default=32)
     p.add_argument("--threshold", type=float, default=0.7)

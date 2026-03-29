@@ -222,7 +222,7 @@ if __name__ == "__main__":
     p.add_argument("--max_remask_ratio", type=float, default=0.25,
                     help="Max fraction of editable tokens to remask per step")
     p.add_argument("--output_dir", default="results/gsm_plus")
-    p.add_argument("--gen_length", type=int, default=512)
+    p.add_argument("--gen_length", type=int, default=16384)
     p.add_argument("--block_length", type=int, default=32)
     p.add_argument("--steps", type=int, default=32)
     p.add_argument("--threshold", type=float, default=0.7)

@@ -3,9 +3,68 @@
 import json
 import os
 import time
+
+import torch
 from tqdm import tqdm
 
 from remask.utils import format_chat_prompt, tokenize_prompt
+
+
+@torch.inference_mode()
+def generate_progressive(
+    model, inputs, mask_id, max_gen_length=16384, chunk_size=4096, **gen_kwargs
+):
+    """Progressive-extension generation for diffusion models.
+
+    Instead of allocating max_gen_length mask tokens upfront (each forward pass
+    attends to the full sequence → O(n²) per step), we start with chunk_size
+    tokens and extend only if EOS is not found.
+
+    Mathematically equivalent to a single gen_length=max_gen_length call because
+    block-causal attention prevents later mask blocks from influencing earlier
+    blocks.  But forward passes operate on shorter sequences, yielding:
+      - ~(max/chunk)² less attention compute for problems that finish early
+      - ~(max/chunk)² less memory for the block-causal attention mask tensor
+
+    Returns: tensor of shape [1, total_generated_tokens] (same as model.generate).
+    """
+    gen_kwargs["mask_id"] = mask_id
+    gen_kwargs["eos_early_stop"] = True
+    EOS_ID = 156892
+
+    all_chunks = []
+    current_input = inputs
+    remaining = max_gen_length
+    total_fwd = 0
+    t0 = time.time()
+
+    while remaining > 0:
+        this_len = min(chunk_size, remaining)
+        out = model.generate(inputs=current_input, gen_length=this_len, **gen_kwargs)
+
+        stats = getattr(model, "_gen_stats", {})
+        total_fwd += stats.get("forward_passes", 0)
+        out_tokens = stats.get("output_tokens", 0)
+
+        all_chunks.append(out)
+
+        if out_tokens < this_len or (out[0] == EOS_ID).any():
+            break
+
+        remaining -= this_len
+        current_input = torch.cat([inputs] + all_chunks, dim=1)
+
+    result = torch.cat(all_chunks, dim=1)
+    elapsed = time.time() - t0
+    total_tok = result.shape[1]
+    model._gen_stats = {
+        "forward_passes": total_fwd,
+        "output_tokens": total_tok,
+        "tpf": total_tok / max(1, total_fwd),
+        "wall_time_s": elapsed,
+        "tps": total_tok / max(1e-9, elapsed),
+    }
+    return result
 
 
 def get_gen_stats(model):
@@ -94,24 +153,34 @@ def gen_kwargs(args, mask_id):
     )
 
 
+def _flush_summary(summary_path, benchmark, tag, args, results, t0, batch_size, done=False):
+    """Write/update summary JSON incrementally."""
+    correct = sum(1 for r in results if r.get("correct"))
+    total = len(results)
+    elapsed = time.time() - t0
+    acc = correct / total if total else 0
+    gen_agg = aggregate_gen_stats(results)
+    with open(summary_path, "w") as f:
+        summary = dict(
+            benchmark=benchmark, tag=tag, mode=getattr(args, "mode", None),
+            strategy=getattr(args, "strategy", None),
+            remask_threshold=getattr(args, "remask_threshold", None),
+            accuracy=acc, correct=correct, total=total,
+            time_s=elapsed, batch_size=batch_size, done=done,
+        )
+        summary.update(gen_agg)
+        json.dump(summary, f, indent=2)
+    return correct, total, acc
+
+
 def run_eval(
     model, tokenizer, mask_id, examples, args, tag, benchmark,
     format_prompt_fn, evaluate_fn, make_result_fn=None,
 ):
     """Generic eval loop with batch + shard support.
 
-    Args:
-        model, tokenizer, mask_id: loaded model assets
-        examples: list of dicts (dataset examples)
-        args: parsed argparse namespace (must include batch_size, shard_id, num_shards,
-              gen_length, block_length, steps, threshold, editing_threshold, temperature)
-        tag: string tag for output files
-        benchmark: benchmark name string
-        format_prompt_fn(ex, tokenizer) -> str: produce the user prompt text
-        evaluate_fn(response_text, ex) -> dict with at least {"correct": bool}:
-            evaluate one response, returns fields to merge into result
-        make_result_fn(ex, eval_result, response) -> dict (optional):
-            build full result dict; if None, uses eval_result + {"response": response}
+    Results are streamed to JSONL (one line per sample) so that partial
+    progress survives crashes.  Summary JSON is refreshed every 10 samples.
     """
     os.makedirs(args.output_dir, exist_ok=True)
     results_path, summary_path = output_paths(args.output_dir, tag, args)
@@ -121,37 +190,25 @@ def run_eval(
     t0 = time.time()
     batch_size = args.batch_size
 
+    fout = open(results_path, "w")
     if batch_size > 1:
         _run_batched(
             model, tokenizer, examples, batch_size, gkw, results,
             format_prompt_fn, evaluate_fn, make_result_fn, tag, benchmark,
+            fout=fout, summary_path=summary_path, args=args, t0=t0,
         )
     else:
         _run_sequential(
             model, tokenizer, examples, gkw, results,
             format_prompt_fn, evaluate_fn, make_result_fn, tag, benchmark,
+            fout=fout, summary_path=summary_path, args=args, t0=t0,
         )
+    fout.close()
 
-    correct = sum(1 for r in results if r.get("correct"))
-    total = len(results)
-    elapsed = time.time() - t0
-    acc = correct / total if total else 0
-    print(f"\n{benchmark} [{tag}] {correct}/{total} = {acc:.4f}  ({elapsed:.0f}s)")
-
-    with open(results_path, "w") as f:
-        for r in results:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
-    gen_agg = aggregate_gen_stats(results)
-    with open(summary_path, "w") as f:
-        summary = dict(
-            benchmark=benchmark, tag=tag, mode=getattr(args, "mode", None),
-            strategy=getattr(args, "strategy", None),
-            remask_threshold=getattr(args, "remask_threshold", None),
-            accuracy=acc, correct=correct, total=total,
-            time_s=elapsed, batch_size=batch_size,
-        )
-        summary.update(gen_agg)
-        json.dump(summary, f, indent=2)
+    correct, total, acc = _flush_summary(
+        summary_path, benchmark, tag, args, results, t0, batch_size, done=True,
+    )
+    print(f"\n{benchmark} [{tag}] {correct}/{total} = {acc:.4f}  ({time.time()-t0:.0f}s)")
     return results, acc
 
 
@@ -170,7 +227,8 @@ def _process_one(model, tokenizer, ex, gkw, format_prompt_fn, evaluate_fn, make_
 
 
 def _run_sequential(model, tokenizer, examples, gkw, results,
-                    format_prompt_fn, evaluate_fn, make_result_fn, tag, benchmark):
+                    format_prompt_fn, evaluate_fn, make_result_fn, tag, benchmark,
+                    fout=None, summary_path=None, args=None, t0=None):
     correct = total = 0
     for i, ex in enumerate(tqdm(examples, desc=f"{benchmark} [{tag}]")):
         r = _process_one(model, tokenizer, ex, gkw,
@@ -178,12 +236,18 @@ def _run_sequential(model, tokenizer, examples, gkw, results,
         correct += r.get("correct", False)
         total += 1
         results.append(r)
-        if (i + 1) % 50 == 0:
-            print(f"  [{i+1}] acc={correct}/{total}={correct/total:.4f}")
+        if fout is not None:
+            fout.write(json.dumps(r, ensure_ascii=False) + "\n")
+            fout.flush()
+        if summary_path and t0 and (total % 10 == 0 or total == len(examples)):
+            _flush_summary(summary_path, benchmark, tag, args, results, t0, 1)
+        if total % 50 == 0:
+            print(f"  [{total}] acc={correct}/{total}={correct/total:.4f}")
 
 
 def _run_batched(model, tokenizer, examples, batch_size, gkw, results,
-                 format_prompt_fn, evaluate_fn, make_result_fn, tag, benchmark):
+                 format_prompt_fn, evaluate_fn, make_result_fn, tag, benchmark,
+                 fout=None, summary_path=None, args=None, t0=None):
     correct = total = 0
     for start in tqdm(range(0, len(examples), batch_size),
                       desc=f"{benchmark} [{tag}] bs={batch_size}"):
@@ -210,6 +274,11 @@ def _run_batched(model, tokenizer, examples, batch_size, gkw, results,
             correct += r.get("correct", False)
             total += 1
             results.append(r)
+            if fout is not None:
+                fout.write(json.dumps(r, ensure_ascii=False) + "\n")
+                fout.flush()
 
+        if summary_path and t0 and (total % 10 == 0 or start + batch_size >= len(examples)):
+            _flush_summary(summary_path, benchmark, tag, args, results, t0, batch_size)
         if total > 0 and total % 50 < batch_size:
             print(f"  [{total}] acc={correct}/{total}={correct/total:.4f}")

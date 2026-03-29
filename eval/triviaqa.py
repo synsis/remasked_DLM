@@ -16,7 +16,7 @@ from remask.utils import (
     compute_em,
     max_metric_over_answers,
 )
-from eval.common import add_parallel_args, shard_dataset
+from eval.common import add_parallel_args, shard_dataset, _attach_gen_stats, aggregate_gen_stats
 
 TRIVIA_PROMPT = "Answer the following trivia question concisely.\n\nQuestion: {question}\nAnswer:"
 
@@ -88,9 +88,10 @@ def run(args):
         sum_em += em
         sum_f1 += f1
         total += 1
-        results.append(dict(
-            golds=golds, predicted=pred, em=em, f1=f1, response=resp,
-            question=ex["question"]))
+        r = dict(golds=golds, predicted=pred, em=em, f1=f1, response=resp,
+                 question=ex["question"])
+        _attach_gen_stats(r, model)
+        results.append(r)
         if (i + 1) % 50 == 0:
             print(
                 f"  [{i+1}] EM={sum_em/total:.4f} F1={sum_f1/total:.4f} "
@@ -104,11 +105,14 @@ def run(args):
     with open(out_path, "w") as f:
         for r in results:
             f.write(json.dumps(r) + "\n")
+    gen_agg = aggregate_gen_stats(results)
     with open(os.path.join(args.output_dir, f"{tag}{shard_sfx}_summary.json"), "w") as f:
-        json.dump(dict(
+        summary = dict(
             benchmark="triviaqa", tag=tag, mode=args.mode,
             strategy=args.strategy, remask_threshold=args.remask_threshold,
-            em=mean_em, f1=mean_f1, total=total, time_s=elapsed), f, indent=2)
+            em=mean_em, f1=mean_f1, total=total, time_s=elapsed)
+        summary.update(gen_agg)
+        json.dump(summary, f, indent=2)
 
 
 if __name__ == "__main__":
@@ -118,7 +122,7 @@ if __name__ == "__main__":
     p.add_argument("--strategy", choices=["low_prob", "t2t_remask", "logit_diff"], default="low_prob")
     p.add_argument("--remask_threshold", type=float, default=None)
     p.add_argument("--output_dir", default="results/triviaqa")
-    p.add_argument("--gen_length", type=int, default=256)
+    p.add_argument("--gen_length", type=int, default=16384)
     p.add_argument("--block_length", type=int, default=32)
     p.add_argument("--steps", type=int, default=32)
     p.add_argument("--threshold", type=float, default=0.7)

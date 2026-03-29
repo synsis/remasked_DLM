@@ -1324,14 +1324,6 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
         num_blocks = (prompt_length + gen_length + block_length - 1) // block_length
         total_length = num_blocks * block_length
 
-        block_mask_2d = torch.tril(torch.ones(num_blocks, num_blocks, device=self.device))
-        block_attn_full = (
-            block_mask_2d
-            .repeat_interleave(block_length, dim=0)
-            .repeat_interleave(block_length, dim=1)
-            .unsqueeze(0).unsqueeze(0)
-        ).to(torch.bfloat16)
-
         position_ids = torch.arange(total_length, device=self.device).unsqueeze(0)
         x = torch.full((1, total_length), mask_id, dtype=torch.long, device=self.device)
         x[:, :prompt_length] = input_ids.clone()
@@ -1353,8 +1345,6 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
                 ] = True
 
             post_steps = 0
-            # Reuse cache between blocks: if kv_cache already covers the prefix,
-            # go straight to KV-cached forward (no full forward needed).
             cache_valid = (
                 kv_cache is not None
                 and kv_cache.get_seq_length() == prefix_len
@@ -1378,11 +1368,17 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
 
                 # ---------- forward pass ----------
                 if not cache_valid:
-                    # Full forward (first block or no usable cache)
                     cur_x = x[:, :current_window_end]
-                    cur_attn = block_attn_full[
-                        :, :, :current_window_end, :current_window_end
-                    ]
+                    # Lazy block-causal mask: only for current_window_end tokens
+                    nb = (current_window_end + block_length - 1) // block_length
+                    bm = torch.tril(torch.ones(nb, nb, device=self.device))
+                    cur_attn = (
+                        bm.repeat_interleave(block_length, 0)
+                          .repeat_interleave(block_length, 1)
+                        [:current_window_end, :current_window_end]
+                        .unsqueeze(0).unsqueeze(0)
+                        .to(torch.bfloat16)
+                    )
                     cur_pos = position_ids[:, :current_window_end]
 
                     active_logits, kv_cache = self._forward_block(
@@ -1526,16 +1522,6 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
         num_blocks = (max_prompt_length + gen_length + block_length - 1) // block_length
         total_length = num_blocks * block_length
 
-        block_mask_2d = torch.tril(
-            torch.ones(num_blocks, num_blocks, device=self.device)
-        )
-        block_attn_full = (
-            block_mask_2d
-            .repeat_interleave(block_length, dim=0)
-            .repeat_interleave(block_length, dim=1)
-            .unsqueeze(0).unsqueeze(0)
-        ).to(torch.bfloat16)
-
         position_ids = (
             torch.arange(total_length, device=self.device)
             .unsqueeze(0)
@@ -1605,9 +1591,16 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
 
                 if not cache_valid:
                     cur_x = x[:, :current_window_end]
-                    cur_attn = block_attn_full[
-                        :, :, :current_window_end, :current_window_end
-                    ].expand(batch_size, -1, -1, -1)
+                    nb = (current_window_end + block_length - 1) // block_length
+                    bm = torch.tril(torch.ones(nb, nb, device=self.device))
+                    cur_attn = (
+                        bm.repeat_interleave(block_length, 0)
+                          .repeat_interleave(block_length, 1)
+                        [:current_window_end, :current_window_end]
+                        .unsqueeze(0).unsqueeze(0)
+                        .to(torch.bfloat16)
+                        .expand(batch_size, -1, -1, -1)
+                    )
                     cur_pos = position_ids[:, :current_window_end]
 
                     active_logits, kv_cache = self._forward_block(

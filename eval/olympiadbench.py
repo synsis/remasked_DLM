@@ -160,7 +160,7 @@ if __name__ == "__main__":
     )
     p.add_argument("--remask_threshold", type=float, default=None)
     p.add_argument("--output_dir", default="results/olympiadbench")
-    p.add_argument("--gen_length", type=int, default=1024)
+    p.add_argument("--gen_length", type=int, default=16384)
     p.add_argument("--block_length", type=int, default=32)
     p.add_argument("--steps", type=int, default=32)
     p.add_argument("--threshold", type=float, default=0.7)

@@ -63,10 +63,13 @@ def extract_last_number(text):
 
 
 def extract_math_answer(text):
-    """Try boxed first, then #### pattern, then last number."""
+    """Try boxed first, then Answer: line, then #### pattern, then last number."""
     boxed = extract_boxed(text)
     if boxed is not None:
         return boxed
+    m = re.search(r"[Aa]nswer:\s*\$?\\?(?:boxed\{)?(-?[\d,]+(?:\.\d+)?)\}?\$?", text)
+    if m:
+        return m.group(1).replace(",", "").strip()
     m = re.search(r"####\s*(-?[\d,]+(?:\.\d+)?)", text)
     if m:
         return m.group(1).replace(",", "").strip()

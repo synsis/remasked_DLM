@@ -133,7 +133,7 @@ if __name__ == "__main__":
     p.add_argument("--strategy", choices=["low_prob", "t2t_remask", "logit_diff"], default="low_prob")
     p.add_argument("--remask_threshold", type=float, default=None)
     p.add_argument("--output_dir", default="results/prontoqa")
-    p.add_argument("--gen_length", type=int, default=256)
+    p.add_argument("--gen_length", type=int, default=16384)
     p.add_argument("--block_length", type=int, default=32)
     p.add_argument("--steps", type=int, default=32)
     p.add_argument("--threshold", type=float, default=0.7)
