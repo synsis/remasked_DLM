@@ -863,7 +863,8 @@ class LLaDA2MoeModel(LLaDA2MoePreTrainedModel):
                 device=inputs_embeds.device,
             )
             position_ids = position_ids.unsqueeze(0)
-        if attention_mask.size() == (batch_size, 1, seq_length, seq_length):
+        kv_length = seq_length + past_seen_tokens
+        if attention_mask is not None and attention_mask.size() == (batch_size, 1, seq_length, kv_length):
             attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
                 attention_mask,
                 (batch_size, seq_length),
@@ -872,7 +873,9 @@ class LLaDA2MoeModel(LLaDA2MoePreTrainedModel):
             )
         else:
             raise ValueError(
-                f"LLaDA2.0 only support block attention mask with shape: {(batch_size, 1, seq_length, seq_length)}, the input attention with shape {attention_mask.size()=}!"
+                f"LLaDA2.0 only support block attention mask with shape: "
+                f"{(batch_size, 1, seq_length, kv_length)}, "
+                f"the input attention with shape {attention_mask.size()=}!"
             )
         # embed positions
         hidden_states = inputs_embeds
@@ -1263,7 +1266,27 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
 
         return not editing_transfer_index.any()
 
-    @torch.no_grad()
+    @staticmethod
+    def _truncate_kv_cache(cache, target_len):
+        """Truncate a DynamicCache to target_len tokens (for KV prefix reuse)."""
+        if cache is None:
+            return
+        cache.crop(target_len)
+
+    def _forward_block(self, block_ids, block_pos, block_attn, kv_cache, block_length):
+        """Forward only the current block, compute logits only for block tokens."""
+        model_out = self.model(
+            block_ids,
+            attention_mask=block_attn,
+            position_ids=block_pos,
+            past_key_values=kv_cache,
+            use_cache=True,
+        )
+        hidden = model_out.last_hidden_state
+        active_logits = self.lm_head(hidden[:, -block_length:, :]).float()
+        return active_logits, model_out.past_key_values
+
+    @torch.inference_mode()
     def generate(
         self,
         inputs: Optional[torch.Tensor] = None,
@@ -1282,61 +1305,13 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
         mask_id: int = 156895,
         num_to_transfer: int = 1,
     ):
-        r"""
-        Generates tokens using a block-wise, iterative refinement strategy.
-        This method operates differently from standard autoregressive generation. It first creates a template of the
-        full desired length, filled with a special `mask_id`. It then processes this template in segments (`blocks`)
-        and iteratively "denoises" or "refines" the `mask_id` tokens into actual tokens over a series of `steps` for
-        each block. A custom block-diagonal causal attention mask ensures that generation within a block can attend to
-        all previous blocks but not future ones.
-        <Tip warning={true}>
-        This is a specialized generation method. The quality and speed of the output are highly dependent on the interplay
-        between `block_length`, `steps`, and `threshold`. It aims to achieve faster generation through parallel
-        decoding within blocks, which is a departure from the token-by-token generation of standard `.generate()` methods.
-        </Tip>
-        Parameters:
-            inputs (`torch.Tensor`):
-                The token sequence used as a prompt for the generation.
-            temperature (`float`, *optional*, defaults to 0.0):
-                The value used to module the next token probabilities. A value of 0.0 corresponds to greedy decoding.
-            block_length (`int`, *optional*, defaults to 32):
-                The size of each generation block. The model generates text in parallel within these blocks. This is a
-                key parameter for controlling the granularity of the generation process.
-            steps (`int`, *optional*, defaults to 32):
-                The number of iterative refinement (or "denoising") steps to perform for each block. Within each block,
-                the model will try to replace `mask_id` tokens with real tokens for this many iterations.
-            gen_length (`int`, *optional*, defaults to 2048):
-                The maximum number of tokens to generate, excluding the prompt.
-            top_p (`float`, *optional*):
-                If set to a float value between 0 and 1, only the most probable tokens with probabilities that add up to
-                `top_p` or higher are kept for generation (nucleus sampling).
-            top_k (`int`, *optional*):
-                The number of highest probability vocabulary tokens to keep for top-k-filtering.
-            eos_early_stop (`bool`, *optional*, defaults to `False`):
-                If `True`, generation will stop as soon as a valid End-Of-Sequence token is generated and confirmed,
-                even if `gen_length` has not been reached.
-            minimal_topk (`int`, *optional*, defaults to 1):
-                A parameter used to dynamically adjust the number of refinement `steps`. The effective number of steps
-                is capped at `gen_length // minimal_topk`.
-            threshold (`float`, *optional*, defaults to 0.95):
-                The confidence probability threshold for accepting a sampled token. During each refinement step, a
-                sampled token is only kept if its probability is above this threshold. If not enough tokens meet the
-                threshold, the ones with the highest confidence are chosen.
-            editing_threshold (`float`, *optional*, defaults to 0.5):
-                The confidence threshold for **editing**. Existing tokens (non-masked) are replaced by newly
-                sampled tokens if the model's confidence in the new token exceeds this threshold and the token has changed.
-            max_post_steps (`int`, *optional*, defaults to 16):
-                Number of global refinement iterations after all mask tokens are resolved.
-            eos_id (`int`, *optional*, defaults to 156892):
-                The token ID for the end-of-sequence token. Used for `eos_early_stop`.
-            mask_id (`int`, *optional*, defaults to 156895):
-                The token ID used as a placeholder for tokens that are yet to be generated. This is central to the
-                iterative refinement algorithm.
-        Return:
-            `torch.Tensor`: A string containing the generated token IDs, starting
-            after the prompt and stopping at the first `eos_id` or `gen_length`.
-        """
+        r"""Block-wise iterative generation with KV prefix caching.
 
+        Key optimizations over the original:
+        1. KV cache for completed blocks — inner loop only forwards current block
+        2. lm_head only on current block positions (not entire sequence)
+        3. EOS-aware early stop inside inner loop (skips unnecessary post-steps)
+        """
         steps = min(steps, gen_length // minimal_topk)
         input_ids = inputs.to(self.device)
 
@@ -1344,83 +1319,120 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
         num_blocks = (prompt_length + gen_length + block_length - 1) // block_length
         total_length = num_blocks * block_length
 
-        block_mask = torch.tril(torch.ones(num_blocks, num_blocks, device=self.device))
-        block_diffusion_attention_mask = (
-            block_mask.repeat_interleave(block_length, dim=0)
+        block_mask_2d = torch.tril(torch.ones(num_blocks, num_blocks, device=self.device))
+        block_attn_full = (
+            block_mask_2d
+            .repeat_interleave(block_length, dim=0)
             .repeat_interleave(block_length, dim=1)
-            .unsqueeze(0)
-            .unsqueeze(0)
+            .unsqueeze(0).unsqueeze(0)
         ).to(torch.bfloat16)
 
         position_ids = torch.arange(total_length, device=self.device).unsqueeze(0)
         x = torch.full((1, total_length), mask_id, dtype=torch.long, device=self.device)
         x[:, :prompt_length] = input_ids.clone()
 
-        prompt_index_full = torch.zeros_like(x, dtype=torch.bool)
-        prompt_index_full[:, :prompt_length] = True
-
         prefill_blocks = prompt_length // block_length
+        kv_cache = None
 
         for num_block in range(prefill_blocks, num_blocks):
             current_window_end = (num_block + 1) * block_length
-            cur_x = x[:, :current_window_end]
-            cur_attn_mask = block_diffusion_attention_mask[
-                :, :, :current_window_end, :current_window_end
-            ]
-            cur_position_ids = position_ids[:, :current_window_end]
+            block_start = num_block * block_length
+            prefix_len = block_start
 
-            block_start_pos = num_block * block_length
+            prompt_mask_in_block = torch.zeros(
+                block_length, dtype=torch.bool, device=self.device,
+            )
+            if block_start < prompt_length:
+                prompt_mask_in_block[
+                    : min(prompt_length - block_start, block_length)
+                ] = True
 
             post_steps = 0
+            # Reuse cache between blocks: if kv_cache already covers the prefix,
+            # go straight to KV-cached forward (no full forward needed).
+            cache_valid = (
+                kv_cache is not None
+                and kv_cache.get_seq_length() == prefix_len
+                and prefix_len > 0
+            )
+
             while True:
-                old_block_tokens = cur_x[:, -block_length:].clone()
-                active_block_mask = cur_x[:, -block_length:] == mask_id
-                if torch.any(active_block_mask) == False:
+                old_block_tokens = x[:, block_start:current_window_end].clone()
+                active_block_mask = old_block_tokens == mask_id
+
+                if not active_block_mask.any():
                     post_steps += 1
+
+                    if eos_early_stop:
+                        gen_part = x[0, prompt_length:current_window_end]
+                        if (gen_part == eos_id).any():
+                            break
+
                 if post_steps > max_post_steps:
                     break
-                prompt_mask_in_block = torch.zeros(
-                    block_length, dtype=torch.bool, device=self.device
-                )
-                if block_start_pos < prompt_length:
-                    prompt_end_in_block = min(
-                        prompt_length - block_start_pos, block_length
+
+                # ---------- forward pass ----------
+                if not cache_valid:
+                    # Full forward (first block or no usable cache)
+                    cur_x = x[:, :current_window_end]
+                    cur_attn = block_attn_full[
+                        :, :, :current_window_end, :current_window_end
+                    ]
+                    cur_pos = position_ids[:, :current_window_end]
+
+                    active_logits, kv_cache = self._forward_block(
+                        cur_x, cur_pos, cur_attn, None, block_length,
                     )
-                    prompt_mask_in_block[:prompt_end_in_block] = True
+                    cache_valid = True
+                else:
+                    self._truncate_kv_cache(kv_cache, prefix_len)
 
-                outputs = self.forward(
-                    cur_x,
-                    attention_mask=cur_attn_mask,
-                    position_ids=cur_position_ids,
-                    output_attentions=True,
-                )
-                logits = outputs.logits
+                    block_ids = x[:, block_start:current_window_end]
+                    block_pos = position_ids[:, block_start:current_window_end]
+                    cache_attn = torch.ones(
+                        1, 1, block_length, prefix_len + block_length,
+                        dtype=torch.bfloat16, device=self.device,
+                    )
 
-                active_logits = logits[:, -block_length:, :]
+                    active_logits, kv_cache = self._forward_block(
+                        block_ids, block_pos, cache_attn, kv_cache, block_length,
+                    )
+
+                # ---------- sample ----------
                 x0, x0_p = self._sample_with_temperature_topk_topp(
-                    active_logits, temperature=temperature, top_k=top_k, top_p=top_p
+                    active_logits, temperature=temperature,
+                    top_k=top_k, top_p=top_p,
                 )
+
+                # ---------- M2T ----------
                 mask_transfer_index = torch.zeros_like(x0, dtype=torch.bool)
                 if active_block_mask.sum() > 0:
-                    mask_confidence = torch.where(active_block_mask, x0_p, -torch.inf)
+                    mask_confidence = torch.where(
+                        active_block_mask, x0_p,
+                        torch.tensor(-torch.inf, device=self.device),
+                    )
                     high_conf_mask = (
                         mask_confidence[0] > threshold
                     ) & active_block_mask[0]
-                    num_high_confidence = high_conf_mask.sum().item()
 
-                    if num_high_confidence >= num_to_transfer:
+                    if high_conf_mask.sum().item() >= num_to_transfer:
                         mask_transfer_index[0] = high_conf_mask
                     else:
-                        num_available = active_block_mask.sum().item()
-                        if num_available > 0:
+                        n_avail = active_block_mask.sum().item()
+                        if n_avail > 0:
                             _, idx = torch.topk(
                                 mask_confidence[0],
-                                k=min(num_to_transfer, num_available),
+                                k=min(num_to_transfer, n_avail),
                             )
                             mask_transfer_index[0, idx] = True
 
+                # ---------- T2T / remask ----------
+                # _token_edit_step operates on a view; create one for the block
+                block_view = x[:, block_start:current_window_end]
+                # Wrap as if block_view IS the tail of a longer tensor
+                # (the method accesses cur_x[:, -block_length:])
                 should_break = self._token_edit_step(
-                    cur_x, x0, x0_p, active_logits, mask_transfer_index,
+                    block_view, x0, x0_p, active_logits, mask_transfer_index,
                     old_block_tokens, active_block_mask,
                     prompt_mask_in_block, editing_threshold,
                     block_length, mask_id,
@@ -1429,23 +1441,237 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
                 if active_block_mask.sum() == 0 and should_break:
                     break
 
-            x[:, :current_window_end] = cur_x
+            # ---------- EOS early stop between blocks ----------
             if eos_early_stop:
-                generated_part = x[0, prompt_length:current_window_end]
-                if (generated_part == mask_id).sum() == 0:
-                    eos_positions = (generated_part == eos_id).nonzero(as_tuple=True)[0]
-                    if len(eos_positions) > 0:
-                        break
+                gen_part = x[0, prompt_length:current_window_end]
+                if (gen_part != mask_id).all() and (gen_part == eos_id).any():
+                    break
 
+        # ---------- extract result ----------
         generated_answer = x[:, : prompt_length + gen_length]
-        mask_positions = (generated_answer[0][input_ids.shape[1] :] == eos_id).nonzero(
-            as_tuple=True
-        )[0]
-        if len(mask_positions) > 0:
-            first_mask_position = mask_positions[0].item()
-        else:
-            first_mask_position = gen_length
+        eos_positions = (
+            generated_answer[0][input_ids.shape[1]:] == eos_id
+        ).nonzero(as_tuple=True)[0]
+        first_eos = eos_positions[0].item() if len(eos_positions) > 0 else gen_length
 
         return generated_answer[
-            :, input_ids.shape[1] : input_ids.shape[1] + first_mask_position + 1
+            :, input_ids.shape[1] : input_ids.shape[1] + first_eos + 1
         ]
+
+    @torch.inference_mode()
+    def generate_batch(
+        self,
+        inputs_list: List[torch.Tensor],
+        temperature: float = 0.0,
+        block_length: int = 32,
+        steps: int = 32,
+        gen_length: int = 2048,
+        top_p: Optional[float] = None,
+        top_k: Optional[int] = None,
+        eos_early_stop: bool = False,
+        minimal_topk: int = 1,
+        threshold: float = 0.95,
+        editing_threshold: float = 0.9,
+        max_post_steps: int = 16,
+        eos_id: int = 156892,
+        mask_id: int = 156895,
+        num_to_transfer: int = 1,
+    ) -> List[torch.Tensor]:
+        """Batched generation with KV prefix caching.
+
+        Key optimizations over the original:
+        1. KV cache for completed blocks — inner loop only forwards current block
+        2. lm_head only on current block positions (not entire sequence)
+        3. EOS-aware early stop inside inner loop and between blocks
+        4. Fixed attention mask broadcasting for batch_size > 1
+        """
+        batch_size = len(inputs_list)
+        if batch_size == 0:
+            return []
+        if batch_size == 1:
+            return [self.generate(
+                inputs_list[0], temperature=temperature,
+                block_length=block_length, steps=steps, gen_length=gen_length,
+                top_p=top_p, top_k=top_k, eos_early_stop=eos_early_stop,
+                minimal_topk=minimal_topk, threshold=threshold,
+                editing_threshold=editing_threshold,
+                max_post_steps=max_post_steps, eos_id=eos_id, mask_id=mask_id,
+                num_to_transfer=num_to_transfer,
+            )]
+
+        steps = min(steps, gen_length // minimal_topk)
+
+        prompt_lengths = [inp.shape[1] for inp in inputs_list]
+        max_prompt_length = max(prompt_lengths)
+
+        num_blocks = (max_prompt_length + gen_length + block_length - 1) // block_length
+        total_length = num_blocks * block_length
+
+        block_mask_2d = torch.tril(
+            torch.ones(num_blocks, num_blocks, device=self.device)
+        )
+        block_attn_full = (
+            block_mask_2d
+            .repeat_interleave(block_length, dim=0)
+            .repeat_interleave(block_length, dim=1)
+            .unsqueeze(0).unsqueeze(0)
+        ).to(torch.bfloat16)
+
+        position_ids = (
+            torch.arange(total_length, device=self.device)
+            .unsqueeze(0)
+            .expand(batch_size, -1)
+        )
+
+        x = torch.full(
+            (batch_size, total_length), mask_id,
+            dtype=torch.long, device=self.device,
+        )
+        for i, inp in enumerate(inputs_list):
+            plen = inp.shape[1]
+            x[i, :plen] = inp[0].to(self.device)
+
+        sample_done = torch.zeros(batch_size, dtype=torch.bool, device=self.device)
+        min_prefill = min(pl // block_length for pl in prompt_lengths)
+        kv_cache = None
+
+        for num_block in range(min_prefill, num_blocks):
+            if sample_done.all():
+                break
+
+            current_window_end = (num_block + 1) * block_length
+            block_start = num_block * block_length
+            prefix_len = block_start
+
+            prompt_masks_in_block = []
+            for i in range(batch_size):
+                pmask = torch.zeros(
+                    block_length, dtype=torch.bool, device=self.device,
+                )
+                if block_start < prompt_lengths[i]:
+                    end = min(prompt_lengths[i] - block_start, block_length)
+                    pmask[:end] = True
+                prompt_masks_in_block.append(pmask)
+
+            post_steps = torch.zeros(batch_size, dtype=torch.long, device=self.device)
+            block_converged = sample_done.clone()
+
+            cache_valid = (
+                kv_cache is not None
+                and kv_cache.get_seq_length() == prefix_len
+                and prefix_len > 0
+            )
+
+            while True:
+                if block_converged.all():
+                    break
+
+                old_block_tokens = x[:, block_start:current_window_end].clone()
+                active_block_mask = old_block_tokens == mask_id
+
+                no_masks = ~active_block_mask.any(dim=1)
+                post_steps[no_masks & ~block_converged] += 1
+
+                if eos_early_stop:
+                    for i in range(batch_size):
+                        if block_converged[i] or not no_masks[i]:
+                            continue
+                        gp = x[i, prompt_lengths[i]:current_window_end]
+                        if (gp == eos_id).any():
+                            block_converged[i] = True
+
+                block_converged = block_converged | (post_steps > max_post_steps)
+                if block_converged.all():
+                    break
+
+                if not cache_valid:
+                    cur_x = x[:, :current_window_end]
+                    cur_attn = block_attn_full[
+                        :, :, :current_window_end, :current_window_end
+                    ].expand(batch_size, -1, -1, -1)
+                    cur_pos = position_ids[:, :current_window_end]
+
+                    active_logits, kv_cache = self._forward_block(
+                        cur_x, cur_pos, cur_attn, None, block_length,
+                    )
+                    cache_valid = True
+                else:
+                    self._truncate_kv_cache(kv_cache, prefix_len)
+
+                    block_ids = x[:, block_start:current_window_end]
+                    block_pos = position_ids[:, block_start:current_window_end]
+                    cache_attn = torch.ones(
+                        batch_size, 1, block_length, prefix_len + block_length,
+                        dtype=torch.bfloat16, device=self.device,
+                    )
+
+                    active_logits, kv_cache = self._forward_block(
+                        block_ids, block_pos, cache_attn, kv_cache, block_length,
+                    )
+
+                x0, x0_p = self._sample_with_temperature_topk_topp(
+                    active_logits, temperature=temperature,
+                    top_k=top_k, top_p=top_p,
+                )
+
+                for i in range(batch_size):
+                    if block_converged[i]:
+                        continue
+
+                    mt_idx = torch.zeros(
+                        block_length, dtype=torch.bool, device=self.device,
+                    )
+                    if active_block_mask[i].any():
+                        mc = torch.where(
+                            active_block_mask[i], x0_p[i],
+                            torch.tensor(-torch.inf, device=self.device),
+                        )
+                        hc = (mc > threshold) & active_block_mask[i]
+                        if hc.sum().item() >= num_to_transfer:
+                            mt_idx = hc
+                        else:
+                            n_avail = active_block_mask[i].sum().item()
+                            if n_avail > 0:
+                                _, topidx = torch.topk(
+                                    mc, k=min(num_to_transfer, n_avail),
+                                )
+                                mt_idx[topidx] = True
+
+                    self._batch_sample_idx = i
+                    should_break = self._token_edit_step(
+                        x[i:i + 1, block_start:current_window_end],
+                        x0[i:i + 1],
+                        x0_p[i:i + 1],
+                        active_logits[i:i + 1],
+                        mt_idx.unsqueeze(0),
+                        old_block_tokens[i:i + 1],
+                        active_block_mask[i:i + 1],
+                        prompt_masks_in_block[i],
+                        editing_threshold,
+                        block_length,
+                        mask_id,
+                    )
+                    self._batch_sample_idx = None
+
+                    if active_block_mask[i].sum() == 0 and should_break:
+                        block_converged[i] = True
+
+            if eos_early_stop:
+                for i in range(batch_size):
+                    if sample_done[i]:
+                        continue
+                    gen_part = x[i, prompt_lengths[i]:current_window_end]
+                    if (gen_part == mask_id).sum() == 0:
+                        eos_pos = (gen_part == eos_id).nonzero(as_tuple=True)[0]
+                        if len(eos_pos) > 0:
+                            sample_done[i] = True
+
+        results = []
+        for i in range(batch_size):
+            plen = prompt_lengths[i]
+            gen_tokens = x[i, plen : plen + gen_length]
+            eos_pos = (gen_tokens == eos_id).nonzero(as_tuple=True)[0]
+            end = eos_pos[0].item() + 1 if len(eos_pos) > 0 else gen_length
+            results.append(x[i, plen : plen + end].unsqueeze(0))
+
+        return results

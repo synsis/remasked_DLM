@@ -1,77 +1,113 @@
 #!/usr/bin/env bash
-# ── 小数据集快速调参 ──
-# 在小样本上遍历 remask 策略 × 阈值，找最优配置
-#
-# 用法:
-#   bash run_tune.sh                    # 默认: 20 样本, 5 个快 benchmark
-#   bash run_tune.sh --max_samples 50   # 50 样本
-#   N=50 bash run_tune.sh               # 等价写法
-
+# ── Dynamic GPU Job Scheduler ──
+# Assigns tasks to GPUs as they become free.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-PYTHON="${PYTHON:-/vepfs-mlp2/c20250506/251105017/miniforge3/envs/remask/bin/python}"
-N="${N:-20}"
+CONDA_ENV="${CONDA_ENV:-remask}"
+N=50
+OUTDIR="results_tune/gsm_plus"
+mkdir -p "$OUTDIR"
 
-# 调参用的 benchmark（小 + 快 + 多领域覆盖）
-TUNE_BENCHMARKS="${TUNE_BENCHMARKS:-gsm_plus mmlu_pro hellaswag piqa cmath}"
+BASE="python -m eval.gsm_plus --max_samples $N --output_dir $OUTDIR"
 
-# 策略 × 阈值网格
-STRATEGIES="${STRATEGIES:-low_prob t2t_remask logit_diff}"
-LOW_PROB_THRS="0.05 0.1 0.15 0.2 0.3"
-T2T_REMASK_THRS="0.7 0.8 0.9 0.95"
-LOGIT_DIFF_THRS="0.1 0.2 0.3 0.5"
+# ═══════════════════════════════════════════════════
+#  TASK LIST
+# ═══════════════════════════════════════════════════
+TASKS=(
+  # Baseline: original LLaDA2.1-mini (no remask)
+  "$BASE --mode original"
+  # Strategy 1: low_prob — threshold ∈ {0.3, 0.5, 0.7, 0.9}
+  "$BASE --mode remask --strategy low_prob --remask_threshold 0.3"
+  "$BASE --mode remask --strategy low_prob --remask_threshold 0.5"
+  "$BASE --mode remask --strategy low_prob --remask_threshold 0.7"
+  "$BASE --mode remask --strategy low_prob --remask_threshold 0.9"
+  # Strategy 2: t2t_remask — threshold ∈ {0.7, 0.8, 0.9, 0.95}
+  "$BASE --mode remask --strategy t2t_remask --remask_threshold 0.7"
+  "$BASE --mode remask --strategy t2t_remask --remask_threshold 0.8"
+  "$BASE --mode remask --strategy t2t_remask --remask_threshold 0.9"
+  "$BASE --mode remask --strategy t2t_remask --remask_threshold 0.95"
+  # Strategy 3: logit_diff — threshold ∈ {0.1, 0.2, 0.3, 0.5}
+  "$BASE --mode remask --strategy logit_diff --remask_threshold 0.1"
+  "$BASE --mode remask --strategy logit_diff --remask_threshold 0.2"
+  "$BASE --mode remask --strategy logit_diff --remask_threshold 0.3"
+  "$BASE --mode remask --strategy logit_diff --remask_threshold 0.5"
+)
 
-EXTRA=""
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --max_samples|-n)  N="$2"; shift 2 ;;
-        *)                 EXTRA="$EXTRA $1"; shift ;;
-    esac
-done
+# ═══════════════════════════════════════════════════
+#  GPU SCHEDULER
+# ═══════════════════════════════════════════════════
+if [ -n "${CUDA_VISIBLE_DEVICES:-}" ]; then
+  IFS=',' read -ra GPUS <<< "$CUDA_VISIBLE_DEVICES"
+else
+  GPUS=($(nvidia-smi --query-gpu=index --format=csv,noheader | tr -d ' '))
+fi
+NUM_GPUS=${#GPUS[@]}
 
-echo "=== Remask Parameter Tuning ==="
-echo "samples per benchmark: $N"
-echo "benchmarks: $TUNE_BENCHMARKS"
+echo "Tasks: ${#TASKS[@]}  |  GPUs: ${NUM_GPUS} (${GPUS[*]})"
 echo ""
 
-# ── 1) Original baseline ──
-for B in $TUNE_BENCHMARKS; do
-    echo ">>> $B [original] (n=$N)"
-    $PYTHON -u -m eval."$B" --mode original --max_samples "$N" \
-        --output_dir "results_tune/$B" $EXTRA 2>&1 | tail -3
+declare -A gpu_pid
+NEXT_TASK=0
+DONE=0
+TOTAL=${#TASKS[@]}
+FAILED=0
+
+assign_task() {
+  local gpu_idx=$1
+  local gpu_id=${GPUS[$gpu_idx]}
+  if [ $NEXT_TASK -ge $TOTAL ]; then
+    return 1
+  fi
+  local task="${TASKS[$NEXT_TASK]}"
+  local task_id=$NEXT_TASK
+  NEXT_TASK=$((NEXT_TASK + 1))
+  echo "[GPU $gpu_id] Starting task $((task_id+1))/$TOTAL"
+  CUDA_VISIBLE_DEVICES=$gpu_id conda run -n $CONDA_ENV $task &
+  gpu_pid[$gpu_idx]=$!
+  return 0
+}
+
+for ((i=0; i<NUM_GPUS && i<TOTAL; i++)); do
+  assign_task $i
 done
 
-# ── 2) Remask grid search ──
-for S in $STRATEGIES; do
-    case "$S" in
-        low_prob)    THRS="$LOW_PROB_THRS" ;;
-        t2t_remask)  THRS="$T2T_REMASK_THRS" ;;
-        logit_diff)  THRS="$LOGIT_DIFF_THRS" ;;
-    esac
-
-    for T in $THRS; do
-        for B in $TUNE_BENCHMARKS; do
-            echo ">>> $B [remask: $S thr=$T] (n=$N)"
-            $PYTHON -u -m eval."$B" --mode remask --strategy "$S" \
-                --remask_threshold "$T" --max_samples "$N" \
-                --output_dir "results_tune/$B" $EXTRA 2>&1 | tail -3
-        done
-    done
+while [ $DONE -lt $TOTAL ]; do
+  for ((i=0; i<NUM_GPUS; i++)); do
+    pid=${gpu_pid[$i]:-0}
+    [ "$pid" -eq 0 ] && continue
+    if ! kill -0 "$pid" 2>/dev/null; then
+      wait "$pid" 2>/dev/null
+      exit_code=$?
+      DONE=$((DONE + 1))
+      gpu_id=${GPUS[$i]}
+      if [ $exit_code -eq 0 ]; then
+        echo "[GPU $gpu_id] Task done ($DONE/$TOTAL)"
+      else
+        echo "[GPU $gpu_id] Task FAILED exit=$exit_code ($DONE/$TOTAL)"
+        FAILED=$((FAILED + 1))
+      fi
+      gpu_pid[$i]=0
+      assign_task $i || true
+    fi
+  done
+  sleep 2
 done
 
-# ── 3) Results table ──
-echo -e "\n\n=============================="
-echo "  TUNING RESULTS (n=$N)"
-echo "=============================="
-printf "%-15s %-30s %s\n" "Benchmark" "Config" "Accuracy"
-printf "%-15s %-30s %s\n" "---------" "------" "--------"
+echo ""
+echo "All $TOTAL tasks complete ($FAILED failed)"
+echo ""
 
-for B in $TUNE_BENCHMARKS; do
-    for f in results_tune/$B/*_summary.json; do
-        [ -f "$f" ] || continue
-        TAG=$($PYTHON -c "import json;d=json.load(open('$f'));print(d.get('tag','?'))" 2>/dev/null)
-        ACC=$($PYTHON -c "import json;d=json.load(open('$f'));a=d.get('accuracy',d.get('em',d.get('f1','?')));print(f'{a:.4f}' if isinstance(a,float) else a)" 2>/dev/null)
-        printf "%-15s %-30s %s\n" "$B" "$TAG" "$ACC"
-    done
-done | sort -k1,1 -k3,3rn
+# Print all results (including previous strategy 1 runs)
+python3 -c "
+import json, glob
+results = []
+for f in sorted(glob.glob('$OUTDIR/*_summary.json')):
+    d = json.load(open(f))
+    results.append(d)
+results.sort(key=lambda x: -x['accuracy'])
+print(f\"{'Config':<50} {'Acc':>6} {'N':>4} {'Time':>7}\")
+print('-'*70)
+for d in results:
+    print(f\"{d['tag']:<50} {d['accuracy']:>6.4f} {d['total']:>4} {d['time_s']:>7.0f}s\")
+"

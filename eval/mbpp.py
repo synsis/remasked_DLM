@@ -13,6 +13,7 @@ from tqdm import tqdm
 
 from remask import load_remask_model, load_original_model
 from remask.utils import format_chat_prompt, tokenize_prompt, extract_code_block
+from eval.common import add_parallel_args, shard_dataset
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 
@@ -54,9 +55,14 @@ def run(args):
 
     problems = load_mbpp()
     print(f"MBPP+: {len(problems)} problems")
+    if args.num_shards > 1:
+        keys = [k for i, k in enumerate(problems) if i % args.num_shards == args.shard_id]
+        problems = {k: problems[k] for k in keys}
+        print(f"  shard {args.shard_id}/{args.num_shards}: {len(problems)} problems")
 
     os.makedirs(args.output_dir, exist_ok=True)
-    out_path = os.path.join(args.output_dir, f"{tag}_samples.jsonl")
+    shard_sfx = f"_shard{args.shard_id}" if args.num_shards > 1 else ""
+    out_path = os.path.join(args.output_dir, f"{tag}{shard_sfx}_samples.jsonl")
     results = []
     t0 = time.time()
 
@@ -103,4 +109,5 @@ if __name__ == "__main__":
     p.add_argument("--temperature", type=float, default=0.0)
     p.add_argument("--instruct", action="store_true", default=True)
     p.add_argument("--no_instruct", dest="instruct", action="store_false")
+    add_parallel_args(p)
     run(p.parse_args())

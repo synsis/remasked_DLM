@@ -1,19 +1,16 @@
 """
 python -m eval.mmlu_pro --mode remask --strategy low_prob --remask_threshold 0.1
+python -m eval.mmlu_pro --mode original --batch_size 4
 """
 
 import argparse
-import json
-import os
 import remask.env  # noqa: F401
-import time
 
-import torch
 from datasets import load_dataset
-from tqdm import tqdm
 
 from remask import load_remask_model, load_original_model
-from remask.utils import format_chat_prompt, tokenize_prompt, extract_choice_answer
+from remask.utils import extract_choice_answer
+from eval.common import add_parallel_args, shard_dataset, run_eval
 
 LETTERS = "ABCDEFGHIJ"
 
@@ -35,9 +32,23 @@ def run_tag(args):
     return f"remask_{args.strategy}_{args.remask_threshold}"
 
 
+def format_prompt(ex, tokenizer):
+    from remask.utils import format_chat_prompt
+    return format_chat_prompt(
+        PROMPT_TPL.format(question=ex["question"], choices=fmt_choices(ex["options"])),
+        tokenizer)
+
+
+def evaluate(resp, ex):
+    gold_idx = ex["answer_index"]
+    gold = LETTERS[gold_idx] if isinstance(gold_idx, int) else ex.get("answer", "")
+    pred = extract_choice_answer(resp)
+    return dict(question=ex["question"], category=ex.get("category", "unknown"),
+                gold=gold, predicted=pred, correct=(pred == gold))
+
+
 def run(args):
     tag = run_tag(args)
-
     if args.mode == "original":
         model, tokenizer, mask_id = load_original_model(args.model_path)
     else:
@@ -49,60 +60,10 @@ def run(args):
     print(f"MMLU-Pro: {len(dataset)} problems")
     if args.max_samples:
         dataset = dataset.select(range(min(args.max_samples, len(dataset))))
+    dataset = shard_dataset(dataset, args)
 
-    os.makedirs(args.output_dir, exist_ok=True)
-    out_path = os.path.join(args.output_dir, f"{tag}_results.jsonl")
-    correct = total = 0
-    results = []
-    cat_stats = {}
-    t0 = time.time()
-
-    for i, ex in enumerate(tqdm(dataset, desc=f"MMLU-Pro [{tag}]")):
-        gold_idx = ex["answer_index"]
-        gold = LETTERS[gold_idx] if isinstance(gold_idx, int) else ex.get("answer", "")
-        cat = ex.get("category", "unknown")
-
-        prompt = format_chat_prompt(
-            PROMPT_TPL.format(question=ex["question"], choices=fmt_choices(ex["options"])),
-            tokenizer)
-        ids = tokenize_prompt(prompt, tokenizer, model.device)
-
-        out = model.generate(
-            inputs=ids, gen_length=args.gen_length, block_length=args.block_length,
-            steps=args.steps, threshold=args.threshold,
-            editing_threshold=args.editing_threshold,
-            temperature=args.temperature, mask_id=mask_id, eos_early_stop=True,
-        )
-        resp = tokenizer.decode(out[0], skip_special_tokens=True)
-        pred = extract_choice_answer(resp)
-        ok = pred == gold
-        correct += ok
-        total += 1
-
-        cs = cat_stats.setdefault(cat, {"c": 0, "t": 0})
-        cs["t"] += 1
-        cs["c"] += ok
-
-        results.append(dict(question=ex["question"], category=cat, gold=gold,
-                            predicted=pred, correct=ok, response=resp))
-        if (i + 1) % 100 == 0:
-            print(f"  [{i+1}] acc={correct}/{total}={correct/total:.4f}")
-
-    elapsed = time.time() - t0
-    acc = correct / total if total else 0
-    print(f"\nMMLU-Pro [{tag}] {correct}/{total} = {acc:.4f}  ({elapsed:.0f}s)")
-    for c in sorted(cat_stats):
-        s = cat_stats[c]
-        print(f"  {c}: {s['c']}/{s['t']}={s['c']/s['t']:.4f}" if s["t"] else "")
-
-    with open(out_path, "w") as f:
-        for r in results:
-            f.write(json.dumps(r) + "\n")
-    with open(os.path.join(args.output_dir, f"{tag}_summary.json"), "w") as f:
-        json.dump(dict(benchmark="mmlu_pro", tag=tag, mode=args.mode,
-                       strategy=args.strategy, remask_threshold=args.remask_threshold,
-                       accuracy=acc, correct=correct, total=total, time_s=elapsed,
-                       category_stats=cat_stats), f, indent=2)
+    run_eval(model, tokenizer, mask_id, list(dataset), args, tag, "mmlu_pro",
+             format_prompt, evaluate)
 
 
 if __name__ == "__main__":
@@ -119,4 +80,5 @@ if __name__ == "__main__":
     p.add_argument("--editing_threshold", type=float, default=0.5)
     p.add_argument("--temperature", type=float, default=0.0)
     p.add_argument("--max_samples", type=int, default=None)
+    add_parallel_args(p)
     run(p.parse_args())

@@ -39,12 +39,13 @@ def load_original_model(model_path=None, device_map="auto"):
 
 def load_remask_model(model_path=None, device_map="auto",
                       strategy="low_prob", remask_threshold=None,
-                      max_remask_per_pos=3):
+                      max_remask_per_pos=3, max_remask_ratio=0.25):
     """Load LLaDA2.1-mini with T2M remask generate().
 
     strategy:            "low_prob" | "t2t_remask" | "logit_diff"
     remask_threshold:    override default threshold for the chosen strategy
     max_remask_per_pos:  每个位置最多被 remask 几次 (防死循环)
+    max_remask_ratio:    每步最多 remask 多少比例的 editable token (防过度 remask)
     """
     from .modeling_remask import LLaDA2MoeRemaskLM
     from .modeling_llada2_moe import LLaDA2MoeConfig
@@ -60,5 +61,6 @@ def load_remask_model(model_path=None, device_map="auto",
     if remask_threshold is not None:
         model.remask_threshold = remask_threshold
     model.max_remask_per_pos = max_remask_per_pos
+    model.max_remask_ratio = max_remask_ratio
     tokenizer, mask_id = _get_tokenizer_and_mask(model_path)
     return model, tokenizer, mask_id

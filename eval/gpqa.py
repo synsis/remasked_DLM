@@ -9,6 +9,7 @@ from tqdm import tqdm
 
 from remask import load_remask_model, load_original_model
 from remask.utils import format_chat_prompt, tokenize_prompt, extract_choice_answer
+from eval.common import add_parallel_args, shard_dataset
 
 GPQA_PROMPT = (
     'The following is a multiple choice question from a graduate-level exam. '
@@ -45,9 +46,11 @@ def run(args):
     print(f"GPQA diamond: {len(dataset)} items")
     if args.max_samples:
         dataset = dataset.select(range(min(args.max_samples, len(dataset))))
+    dataset = shard_dataset(dataset, args)
 
     os.makedirs(args.output_dir, exist_ok=True)
-    out_path = os.path.join(args.output_dir, f"{tag}_results.jsonl")
+    shard_sfx = f"_shard{args.shard_id}" if args.num_shards > 1 else ""
+    out_path = os.path.join(args.output_dir, f"{tag}{shard_sfx}_results.jsonl")
     correct = total = 0
     results = []
     t0 = time.time()
@@ -82,7 +85,7 @@ def run(args):
     with open(out_path, "w") as f:
         for r in results:
             f.write(json.dumps(r) + "\n")
-    with open(os.path.join(args.output_dir, f"{tag}_summary.json"), "w") as f:
+    with open(os.path.join(args.output_dir, f"{tag}{shard_sfx}_summary.json"), "w") as f:
         json.dump(dict(
             benchmark="gpqa", tag=tag, mode=args.mode,
             strategy=args.strategy, remask_threshold=args.remask_threshold,
@@ -103,4 +106,5 @@ if __name__ == "__main__":
     p.add_argument("--editing_threshold", type=float, default=0.5)
     p.add_argument("--temperature", type=float, default=0.0)
     p.add_argument("--max_samples", type=int, default=None)
+    add_parallel_args(p)
     run(p.parse_args())

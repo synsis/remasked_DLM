@@ -1,23 +1,19 @@
 """
 python -m eval.bbh --mode remask --strategy low_prob --remask_threshold 0.1
-python -m eval.bbh --mode original
+python -m eval.bbh --mode original --batch_size 4
 """
 
 import argparse
-import json
-import os
 import remask.env  # noqa: F401
 import re
 import string
-import time
 import unicodedata
 
-import torch
 from datasets import concatenate_datasets, get_dataset_config_names, load_dataset
-from tqdm import tqdm
 
 from remask import load_remask_model, load_original_model
-from remask.utils import compute_em, format_chat_prompt, tokenize_prompt
+from remask.utils import compute_em
+from eval.common import add_parallel_args, shard_dataset, run_eval
 
 
 def _norm(s):
@@ -57,9 +53,20 @@ def run_tag(args):
     return f"remask_{args.strategy}_{args.remask_threshold}"
 
 
+def format_prompt(ex, tokenizer):
+    from remask.utils import format_chat_prompt
+    user = f"Follow the given examples and answer the question.\n\n{ex['input']}\nAnswer:"
+    return format_chat_prompt(user, tokenizer)
+
+
+def evaluate(resp, ex):
+    target = ex["target"]
+    ok = bbh_correct(resp, target)
+    return dict(input=ex["input"], target=target, correct=ok)
+
+
 def run(args):
     tag = run_tag(args)
-
     if args.mode == "original":
         model, tokenizer, mask_id = load_original_model(args.model_path)
     else:
@@ -71,45 +78,10 @@ def run(args):
     print(f"BBH: {len(dataset)} items")
     if args.max_samples:
         dataset = dataset.select(range(min(args.max_samples, len(dataset))))
+    dataset = shard_dataset(dataset, args)
 
-    os.makedirs(args.output_dir, exist_ok=True)
-    out_path = os.path.join(args.output_dir, f"{tag}_results.jsonl")
-    correct = total = 0
-    results = []
-    t0 = time.time()
-
-    for i, ex in enumerate(tqdm(dataset, desc=f"BBH [{tag}]")):
-        inp = ex["input"]
-        target = ex["target"]
-        user = f"Follow the given examples and answer the question.\n\n{inp}\nAnswer:"
-        prompt = format_chat_prompt(user, tokenizer)
-        ids = tokenize_prompt(prompt, tokenizer, model.device)
-
-        out = model.generate(
-            inputs=ids, gen_length=args.gen_length, block_length=args.block_length,
-            steps=args.steps, threshold=args.threshold,
-            editing_threshold=args.editing_threshold,
-            temperature=args.temperature, mask_id=mask_id, eos_early_stop=True,
-        )
-        resp = tokenizer.decode(out[0], skip_special_tokens=True)
-        ok = bbh_correct(resp, target)
-        correct += ok
-        total += 1
-        results.append(dict(input=inp, target=target, response=resp, correct=ok))
-        if (i + 1) % 50 == 0:
-            print(f"  [{i+1}] acc={correct}/{total}={correct/total:.4f}")
-
-    elapsed = time.time() - t0
-    acc = correct / total if total else 0
-    print(f"\nBBH [{tag}] {correct}/{total} = {acc:.4f}  ({elapsed:.0f}s)")
-
-    with open(out_path, "w") as f:
-        for r in results:
-            f.write(json.dumps(r) + "\n")
-    with open(os.path.join(args.output_dir, f"{tag}_summary.json"), "w") as f:
-        json.dump(dict(benchmark="bbh", tag=tag, mode=args.mode,
-                       strategy=args.strategy, remask_threshold=args.remask_threshold,
-                       accuracy=acc, correct=correct, total=total, time_s=elapsed), f, indent=2)
+    run_eval(model, tokenizer, mask_id, list(dataset), args, tag, "bbh",
+             format_prompt, evaluate)
 
 
 if __name__ == "__main__":
@@ -126,4 +98,5 @@ if __name__ == "__main__":
     p.add_argument("--editing_threshold", type=float, default=0.5)
     p.add_argument("--temperature", type=float, default=0.0)
     p.add_argument("--max_samples", type=int, default=None)
+    add_parallel_args(p)
     run(p.parse_args())
