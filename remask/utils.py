@@ -63,11 +63,20 @@ def extract_last_number(text):
 
 
 def extract_math_answer(text):
-    """Try boxed first, then Answer: line, then #### pattern, then last number."""
+    """Extract numeric answer — aligned with OpenCompass gsm8k_postprocess.
+
+    Priority: boxed > "The answer is X" > "Answer: X" > "答案是X" > last number.
+    """
     boxed = extract_boxed(text)
     if boxed is not None:
         return boxed
+    m = re.search(r"[Tt]he answer is[:\s]*(-?[\d,]+(?:\.\d+)?)", text)
+    if m:
+        return m.group(1).replace(",", "").strip()
     m = re.search(r"[Aa]nswer:\s*\$?\\?(?:boxed\{)?(-?[\d,]+(?:\.\d+)?)\}?\$?", text)
+    if m:
+        return m.group(1).replace(",", "").strip()
+    m = re.search(r"答案[是为：:\s]+(-?[\d,]+(?:\.\d+)?)", text)
     if m:
         return m.group(1).replace(",", "").strip()
     m = re.search(r"####\s*(-?[\d,]+(?:\.\d+)?)", text)

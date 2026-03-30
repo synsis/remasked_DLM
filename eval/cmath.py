@@ -14,7 +14,9 @@ from remask.utils import extract_math_answer, normalize_numeric
 from eval.common import add_parallel_args, shard_dataset, run_eval
 
 CMATH_PROMPT = (
-    "请逐步解决以下数学问题，在最后用####给出最终数字答案。\n\n问题：{question}"
+    "请逐步解决以下数学问题。\n\n"
+    "问题：{question}\n\n"
+    "请一步一步思考，最后一行请用「答案是X」的格式给出最终数字答案。"
 )
 
 
