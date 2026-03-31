@@ -85,7 +85,19 @@ Our contributions are:
     \item We conduct comprehensive experiments across \textsc{XX} benchmarks demonstrating consistent improvements.
 \end{itemize}
 
-\input{figures/fig_overview}
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\textwidth]{figures/fig1.pdf}
+  \caption{\textbf{T2T editing vs.\ T2M remasking.}
+  (a)~T2T detects the erroneous token ``purple'' but cannot correct it:
+  the conditional distribution is multimodal (``happy,'' ``glad,'' ``pleased'' each ${\sim}0.25$)
+  so no single candidate exceeds the confidence threshold---a failure mode we call
+  \emph{correction inertia}.  The error persists and pollutes context for subsequent predictions.
+  (b)~T2M detects the same error via low posterior probability and resets it to \mask{}
+  (\emph{context purification}).  A subsequent M2T step re-predicts the position under
+  cleaner context, producing the correct token (\emph{delayed commitment}).}
+  \label{fig:overview}
+\end{figure}
 
 %=============================================================================
 \section{Background}
