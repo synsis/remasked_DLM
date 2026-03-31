@@ -153,6 +153,18 @@ def gen_kwargs(args, mask_id):
     )
 
 
+def gen_params_dict(args):
+    """Extract all generation / eval hyper-params from argparse namespace."""
+    d = {}
+    for key in ("gen_length", "block_length", "steps", "threshold",
+                "editing_threshold", "temperature", "batch_size",
+                "strategy", "remask_threshold", "max_remask_ratio"):
+        val = getattr(args, key, None)
+        if val is not None:
+            d[key] = val
+    return d
+
+
 def _flush_summary(summary_path, benchmark, tag, args, results, t0, batch_size, done=False):
     """Write/update summary JSON incrementally."""
     correct = sum(1 for r in results if r.get("correct"))
@@ -163,11 +175,10 @@ def _flush_summary(summary_path, benchmark, tag, args, results, t0, batch_size, 
     with open(summary_path, "w") as f:
         summary = dict(
             benchmark=benchmark, tag=tag, mode=getattr(args, "mode", None),
-            strategy=getattr(args, "strategy", None),
-            remask_threshold=getattr(args, "remask_threshold", None),
             accuracy=acc, correct=correct, total=total,
-            time_s=elapsed, batch_size=batch_size, done=done,
+            time_s=elapsed, done=done,
         )
+        summary.update(gen_params_dict(args))
         summary.update(gen_agg)
         json.dump(summary, f, indent=2)
     return correct, total, acc

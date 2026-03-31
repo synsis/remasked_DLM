@@ -18,7 +18,7 @@ from tqdm import tqdm
 
 from remask import load_remask_model, load_original_model
 from remask.utils import format_chat_prompt, tokenize_prompt, extract_math_answer, normalize_numeric
-from eval.common import _attach_gen_stats, aggregate_gen_stats, get_gen_stats
+from eval.common import _attach_gen_stats, aggregate_gen_stats, get_gen_stats, gen_params_dict
 
 GSM_PLUS_FEW_SHOT = (
     "Question: Angelo and Melanie want to plan how many hours over the next week they should study together for their test next week. They have 2 chapters of their textbook to study and 4 worksheets to memorize. They figure out that they should dedicate 3 hours to each chapter of their textbook and 1.5 hours for each worksheet. If they plan to study no more than 4 hours each day, how many days should they plan to study total over the next week if they take a 10-minute break every hour, include 3 10-minute snack breaks each day, and 30 minutes for lunch each day?\n"
@@ -78,10 +78,9 @@ def _flush_summary(summary_path, tag, args, results, t0, batch_size, done=False)
         summary = dict(
             benchmark="gsm_plus", tag=tag, mode=args.mode,
             accuracy=acc, correct=correct, total=total, time_s=elapsed,
-            strategy=args.strategy, remask_threshold=args.remask_threshold,
-            max_remask_ratio=getattr(args, 'max_remask_ratio', None),
-            batch_size=batch_size, done=done,
+            done=done,
         )
+        summary.update(gen_params_dict(args))
         summary.update(gen_agg)
         json.dump(summary, f, indent=2)
 

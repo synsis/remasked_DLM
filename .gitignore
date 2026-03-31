@@ -9,7 +9,7 @@ build/
 
 # HuggingFace / Dataset cache
 .cache/
-
+result*
 # IDE
 .vscode/
 .idea/

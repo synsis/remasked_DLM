@@ -10,9 +10,9 @@ Three remask strategies, selected by self.remask_strategy:
                x0_p > remask_threshold AND x0 != old_token → remask
                即：模型很自信地想换一个不同的 token，说明旧的不对
 
-  "logit_diff" (策略3): 新旧两步 logits 归一化后对该 token 的概率差异大 → remask
-               |P_new(old_token) - P_prev(old_token)| > remask_threshold → remask
-               即：模型对这个位置的看法在两步之间变化剧烈，说明不稳定
+  "logit_diff" (策略3): 该 token 的预测概率在两步间下降超过阈值 → remask
+               P_prev(old_token) - P_new(old_token) > remask_threshold → remask
+               即：模型对这个 token 的置信度下降了，说明它与演化的上下文不兼容
 
 防死循环: 每个位置最多被 remask max_remask_per_pos 次 (默认 3)
 """
@@ -29,7 +29,7 @@ STRATEGY_DEFAULTS = {
     #                       remask_threshold
     "low_prob":             0.5,    # P_new(old_token) < 0.5 → remask
     "t2t_remask":           0.9,    # P(new_token) > 0.9 且 new≠old → remask
-    "logit_diff":           0.3,    # |ΔP(old_token)| > 0.3 → remask
+    "logit_diff":           0.3,    # P_prev - P_new > 0.3 → remask
 }
 
 
@@ -89,9 +89,10 @@ class LLaDA2MoeRemaskLM(LLaDA2MoeModelLM):
     # ── 策略 3: 新旧 logits 归一化概率差异大 → remask ─────────────────
 
     def _remask_logit_diff(self, active_logits, old_block_tokens, editable, threshold):
-        """两步之间，该 token 的预测概率变化超过 threshold → remask.
-        Returns (remask_mask, confidence_scores) — diff 越大越该被 remask,
-        所以 score = -diff (越低越该 remask).
+        """两步之间，该 token 的预测概率下降超过 threshold → remask.
+        只在置信度下降（p_old > p_new）时触发，置信度上升说明 token 被认可。
+        Returns (remask_mask, confidence_scores) — drop 越大越该被 remask,
+        所以 score = -drop (越低越该 remask).
         """
         probs_new = F.softmax(active_logits[0].float(), dim=-1)
         p_new = probs_new.gather(1, old_block_tokens[0].unsqueeze(-1)).squeeze(-1)
@@ -117,8 +118,8 @@ class LLaDA2MoeRemaskLM(LLaDA2MoeModelLM):
             self._batch_prev_logits[bidx] = active_logits.detach().clone()
         else:
             self._prev_logits = active_logits.detach().clone()
-        diff = (p_old - p_new).abs()
-        return (diff > threshold) & editable[0], -diff
+        drop = p_old - p_new
+        return (drop > threshold) & editable[0], -drop
 
     # ── 总入口 ─────────────────────────────────────────────────────────
 

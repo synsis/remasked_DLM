@@ -1,26 +1,16 @@
 """
 python -m eval.hellaswag --mode remask --strategy low_prob --remask_threshold 0.1
-python -m eval.hellaswag --mode original
+python -m eval.hellaswag --mode original --batch_size 128
 """
 
 import argparse
-import json
-import os
 import remask.env  # noqa: F401
-import time
 
-import torch
 from datasets import load_dataset
-from tqdm import tqdm
 
 from remask import load_remask_model, load_original_model
-from remask.utils import extract_choice_answer, format_chat_prompt, tokenize_prompt
-from eval.common import add_parallel_args, shard_dataset, _attach_gen_stats, aggregate_gen_stats
-
-
-def label_to_letter(label):
-    i = int(label)
-    return chr(ord("A") + i)
+from remask.utils import extract_choice_answer
+from eval.common import add_parallel_args, shard_dataset, run_eval
 
 
 def run_tag(args):
@@ -29,9 +19,28 @@ def run_tag(args):
     return f"remask_{args.strategy}_{args.remask_threshold}"
 
 
+def format_prompt(ex, tokenizer):
+    from remask.utils import format_chat_prompt
+    ctx = ex["ctx"]
+    endings = ex["endings"]
+    user = (
+        "Choose the most plausible continuation.\n\n"
+        f"Context: {ctx}\n\n"
+        f"A. {endings[0]}\nB. {endings[1]}\nC. {endings[2]}\nD. {endings[3]}\n\n"
+        "The answer is"
+    )
+    return format_chat_prompt(user, tokenizer)
+
+
+def evaluate(resp, ex):
+    gold = chr(ord("A") + int(ex["label"]))
+    pred = extract_choice_answer(resp, 4)
+    ok = pred == gold
+    return dict(ctx=ex["ctx"], gold=gold, predicted=pred, correct=ok)
+
+
 def run(args):
     tag = run_tag(args)
-
     if args.mode == "original":
         model, tokenizer, mask_id = load_original_model(args.model_path)
     else:
@@ -45,57 +54,8 @@ def run(args):
         dataset = dataset.select(range(min(args.max_samples, len(dataset))))
     dataset = shard_dataset(dataset, args)
 
-    os.makedirs(args.output_dir, exist_ok=True)
-    shard_sfx = f"_shard{args.shard_id}" if args.num_shards > 1 else ""
-    out_path = os.path.join(args.output_dir, f"{tag}{shard_sfx}_results.jsonl")
-    correct = total = 0
-    results = []
-    t0 = time.time()
-
-    for i, ex in enumerate(tqdm(dataset, desc=f"HellaSwag [{tag}]")):
-        ctx = ex["ctx"]
-        endings = ex["endings"]
-        gold = label_to_letter(ex["label"])
-        user = (
-            "Choose the most plausible continuation.\n\n"
-            f"Context: {ctx}\n\n"
-            f"A. {endings[0]}\nB. {endings[1]}\nC. {endings[2]}\nD. {endings[3]}\n\n"
-            "The answer is"
-        )
-        prompt = format_chat_prompt(user, tokenizer)
-        ids = tokenize_prompt(prompt, tokenizer, model.device)
-
-        out = model.generate(
-            inputs=ids, gen_length=args.gen_length, block_length=args.block_length,
-            steps=args.steps, threshold=args.threshold,
-            editing_threshold=args.editing_threshold,
-            temperature=args.temperature, mask_id=mask_id, eos_early_stop=True,
-        )
-        resp = tokenizer.decode(out[0], skip_special_tokens=True)
-        pred = extract_choice_answer(resp, 4)
-        ok = pred == gold
-        correct += ok
-        total += 1
-        r = dict(ctx=ctx, gold=gold, predicted=pred, correct=ok, response=resp)
-        _attach_gen_stats(r, model)
-        results.append(r)
-        if (i + 1) % 50 == 0:
-            print(f"  [{i+1}] acc={correct}/{total}={correct/total:.4f}")
-
-    elapsed = time.time() - t0
-    acc = correct / total if total else 0
-    print(f"\nHellaSwag [{tag}] {correct}/{total} = {acc:.4f}  ({elapsed:.0f}s)")
-
-    with open(out_path, "w") as f:
-        for r in results:
-            f.write(json.dumps(r) + "\n")
-    gen_agg = aggregate_gen_stats(results)
-    with open(os.path.join(args.output_dir, f"{tag}{shard_sfx}_summary.json"), "w") as f:
-        summary = dict(benchmark="hellaswag", tag=tag, mode=args.mode,
-                       strategy=args.strategy, remask_threshold=args.remask_threshold,
-                       accuracy=acc, correct=correct, total=total, time_s=elapsed)
-        summary.update(gen_agg)
-        json.dump(summary, f, indent=2)
+    run_eval(model, tokenizer, mask_id, list(dataset), args, tag, "hellaswag",
+             format_prompt, evaluate)
 
 
 if __name__ == "__main__":

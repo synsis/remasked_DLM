@@ -1,20 +1,16 @@
 """
 python -m eval.aime2025 --mode remask --strategy low_prob --remask_threshold 0.1
-python -m eval.aime2025 --mode original
+python -m eval.aime2025 --mode original --batch_size 4
 """
 
 import argparse
 import json
 import os
 import remask.env  # noqa: F401
-import time
-
-import torch
-from tqdm import tqdm
 
 from remask import load_remask_model, load_original_model
-from remask.utils import format_chat_prompt, tokenize_prompt, extract_math_answer, normalize_numeric
-from eval.common import add_parallel_args, shard_dataset, _attach_gen_stats, aggregate_gen_stats
+from remask.utils import extract_math_answer, normalize_numeric
+from eval.common import add_parallel_args, run_eval
 
 AIME_PROMPT = (
     "Solve the following math problem step by step. The last line of your "
@@ -42,99 +38,44 @@ def load_problems(path):
     return data
 
 
+def format_prompt(ex, tokenizer):
+    from remask.utils import format_chat_prompt
+    return format_chat_prompt(AIME_PROMPT.format(problem=ex["problem"]), tokenizer)
+
+
+def evaluate(resp, ex):
+    gold = str(ex["answer"]).strip()
+    pred = extract_math_answer(resp)
+    ok = normalize_numeric(pred) == normalize_numeric(gold)
+    return dict(problem=ex["problem"], gold=gold, predicted=pred, correct=ok)
+
+
 def run(args):
     tag = run_tag(args)
-
     if args.mode == "original":
         model, tokenizer, mask_id = load_original_model(args.model_path)
     else:
         model, tokenizer, mask_id = load_remask_model(
-            args.model_path,
-            strategy=args.strategy,
-            remask_threshold=args.remask_threshold,
-        )
+            args.model_path, strategy=args.strategy,
+            remask_threshold=args.remask_threshold)
 
     problems = load_problems(_DEFAULT_DATA)
-    print(
-        f"AIME 2025: {len(problems)} problems from {_DEFAULT_DATA} "
-        "(fill data/aime2025.json for full official set)"
-    )
+    print(f"AIME 2025: {len(problems)} problems from {_DEFAULT_DATA}")
     if args.max_samples:
         problems = problems[: min(args.max_samples, len(problems))]
     if args.num_shards > 1:
         problems = [p for i, p in enumerate(problems) if i % args.num_shards == args.shard_id]
         print(f"  shard {args.shard_id}/{args.num_shards}: {len(problems)} problems")
 
-    os.makedirs(args.output_dir, exist_ok=True)
-    shard_sfx = f"_shard{args.shard_id}" if args.num_shards > 1 else ""
-    out_path = os.path.join(args.output_dir, f"{tag}{shard_sfx}_results.jsonl")
-    summary_path = os.path.join(args.output_dir, f"{tag}{shard_sfx}_summary.json")
-    correct = total = 0
-    results = []
-    t0 = time.time()
-
-    fout = open(out_path, "w")
-    for i, ex in enumerate(tqdm(problems, desc=f"AIME2025 [{tag}]")):
-        gold = str(ex["answer"]).strip()
-        prob = ex["problem"]
-        prompt = format_chat_prompt(AIME_PROMPT.format(problem=prob), tokenizer)
-        ids = tokenize_prompt(prompt, tokenizer, model.device)
-
-        out = model.generate(
-            inputs=ids,
-            gen_length=args.gen_length,
-            block_length=args.block_length,
-            steps=args.steps,
-            threshold=args.threshold,
-            editing_threshold=args.editing_threshold,
-            temperature=args.temperature,
-            mask_id=mask_id,
-            eos_early_stop=True,
-        )
-        resp = tokenizer.decode(out[0], skip_special_tokens=True)
-        pred = extract_math_answer(resp)
-        ok = normalize_numeric(pred) == normalize_numeric(gold)
-        correct += ok
-        total += 1
-        r = dict(problem=prob, gold=gold, predicted=pred, correct=ok, response=resp)
-        _attach_gen_stats(r, model)
-        results.append(r)
-
-        fout.write(json.dumps(r, ensure_ascii=False) + "\n")
-        fout.flush()
-
-        if total % 5 == 0 or total == len(problems):
-            elapsed = time.time() - t0
-            acc = correct / total if total else 0
-            gen_agg = aggregate_gen_stats(results)
-            with open(summary_path, "w") as fs:
-                summary = dict(
-                    benchmark="aime2025", tag=tag, mode=args.mode,
-                    strategy=args.strategy,
-                    remask_threshold=args.remask_threshold,
-                    data_path=_DEFAULT_DATA,
-                    accuracy=acc, correct=correct, total=total,
-                    time_s=elapsed, done=(total == len(problems)),
-                )
-                summary.update(gen_agg)
-                json.dump(summary, fs, indent=2)
-            print(f"  [{total}/{len(problems)}] acc={correct}/{total}={acc:.4f}")
-    fout.close()
-
-    elapsed = time.time() - t0
-    acc = correct / total if total else 0
-    print(f"\nAIME2025 [{tag}] {correct}/{total} = {acc:.4f}  ({elapsed:.0f}s)")
+    run_eval(model, tokenizer, mask_id, problems, args, tag, "aime2025",
+             format_prompt, evaluate)
 
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--model_path", default=None)
     p.add_argument("--mode", choices=["original", "remask"], default="remask")
-    p.add_argument(
-        "--strategy",
-        choices=["low_prob", "t2t_remask", "logit_diff"],
-        default="low_prob",
-    )
+    p.add_argument("--strategy", choices=["low_prob", "t2t_remask", "logit_diff"], default="low_prob")
     p.add_argument("--remask_threshold", type=float, default=None)
     p.add_argument("--output_dir", default="results/aime2025")
     p.add_argument("--gen_length", type=int, default=16384)
