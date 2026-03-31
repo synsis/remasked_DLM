@@ -22,6 +22,8 @@
 \usepackage{amsthm}
 \usepackage{bbm}
 \usepackage{tikz}
+\usepackage{pifont}
+\usepackage{enumitem}
 
 \newtheorem{definition}{Definition}
 \newtheorem{proposition}{Proposition}
@@ -35,7 +37,7 @@
 \newcommand{\xold}{x_i^{\mathrm{old}}}
 \newcommand{\xnew}{x_i^{*}}
 
-\title{Targeted Remasking: Replacing Token Editing with Token-to-Mask Refinement in Discrete Diffusion Language Models}
+\title{Targeted Remasking: Replacing Token Editing with Token-to-Mask Refinement in Discrete Diffusion Language Models\thanks{Code available at \url{https://github.com/synsis/remasked_DLM}.}}
 
 \author{
   Lin Yao$^{1,2}$ \\
@@ -65,6 +67,20 @@ To address this, LLaDA2.1~\citep{nie2026llada21} introduced a key inference-time
 
 However, we identify three fundamental limitations of \TtoT{} editing:
 
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\textwidth, trim=135pt 50pt 130pt 35pt, clip]{figures/fig1.pdf}
+    \caption{\textbf{T2T editing vs.\ T2M remasking.}
+    (a)~T2T detects the erroneous token ``purple'' but cannot correct it:
+    the conditional distribution is multimodal (``happy,'' ``glad,'' ``pleased'' each ${\sim}0.25$)
+    so no single candidate exceeds the confidence threshold---a failure mode we call
+    \emph{correction inertia}.  The error persists and pollutes context for subsequent predictions.
+    (b)~T2M detects the same error via low posterior probability and resets it to \mask{}
+    (\emph{context purification}).  A subsequent M2T step re-predicts the position under
+    cleaner context, producing the correct token (\emph{delayed commitment}).}
+    \label{fig:overview}
+  \end{figure}
+
 \begin{enumerate}
     \item \textbf{Detection--replacement coupling.} \TtoT{} requires simultaneous satisfaction of two conditions: the current token must be wrong, \emph{and} a high-confidence replacement must exist. When the correct distribution is multimodal (multiple plausible tokens), no single candidate may exceed the confidence threshold, leaving clearly erroneous tokens uncorrected---a failure mode we term \emph{correction inertia}.
 
@@ -85,19 +101,6 @@ Our contributions are:
     \item We conduct comprehensive experiments across \textsc{XX} benchmarks demonstrating consistent improvements.
 \end{itemize}
 
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=\textwidth, trim=135pt 50pt 130pt 35pt, clip]{figures/fig1.pdf}
-  \caption{\textbf{T2T editing vs.\ T2M remasking.}
-  (a)~T2T detects the erroneous token ``purple'' but cannot correct it:
-  the conditional distribution is multimodal (``happy,'' ``glad,'' ``pleased'' each ${\sim}0.25$)
-  so no single candidate exceeds the confidence threshold---a failure mode we call
-  \emph{correction inertia}.  The error persists and pollutes context for subsequent predictions.
-  (b)~T2M detects the same error via low posterior probability and resets it to \mask{}
-  (\emph{context purification}).  A subsequent M2T step re-predicts the position under
-  cleaner context, producing the correct token (\emph{delayed commitment}).}
-  \label{fig:overview}
-\end{figure}
 
 %=============================================================================
 \section{Background}
@@ -498,7 +501,9 @@ Our theoretical analysis provides a unified understanding of why mask tokens are
 
 \paragraph{Limitations.} Our approach is specific to the \TtoT{} editing mechanism in LLaDA2.1 and may not directly apply to dLLMs without such a mechanism. The theoretical analysis relies on the assumption that mask context is always preferable to erroneous context, which may not hold when error rates are very low. The safety mechanisms introduce hyperparameters ($C_{\max}$, $\rho_{\max}$) that may require task-specific tuning.
 
-\paragraph{Future work.} Combining \TtoM{} remasking with sampling-level remasking (e.g., ReMDM) could yield further improvements. Learning the remask threshold adaptively (e.g., via the PRISM framework) rather than using fixed heuristics is a promising direction. Extending the analysis to other dLLM architectures beyond LLaDA2.1 is also of interest.
+\paragraph{Future work.} A central finding of this work is the \emph{train--inference noise mismatch}: the random token perturbations used in \TtoT{} training differ fundamentally from the systematic, model-generated errors encountered at inference. While \TtoM{} mitigates this by resetting errors to the model's native \mask{} noise type, a more direct remedy would be to close this gap at the training level. Specifically, \emph{noise-aware continued training} could replace the random perturbations in the \TtoT{} training stream with realistic, model-generated errors---collected by running the model's own inference pipeline and recording the actual erroneous tokens that arise. Training on such ``real noise'' would expose the model to the systematic error patterns it will face at inference, potentially improving both \MtoT{} predictions under polluted context and \TtoT{} correction accuracy. This is complementary to our inference-time approach: \TtoM{} improves the correction \emph{mechanism}, while noise-aware training improves the model's \emph{robustness} to realistic errors.
+
+Beyond this, combining \TtoM{} remasking with sampling-level remasking (e.g., ReMDM) could yield further improvements. Learning the remask threshold adaptively (e.g., via the PRISM framework) rather than using fixed heuristics is a promising direction. Extending the analysis to other dLLM architectures beyond LLaDA2.1 is also of interest.
 
 \begin{ack}
 Anonymous for review.
@@ -513,37 +518,37 @@ Anonymous for review.
 \section{Benchmark Details}
 \label{app:benchmarks}
 
-Table~\ref{tab:benchmark_details} lists all benchmarks used in our evaluation with dataset details and generation length settings.
+Table~\ref{tab:benchmark_details} lists all benchmarks used in our evaluation with dataset details.
 
 \begin{table}[h]
 \centering
 \caption{Benchmark details.}
 \label{tab:benchmark_details}
 \small
-\begin{tabular}{llcccc}
+\begin{tabular}{llccc}
 \toprule
-\textbf{Category} & \textbf{Benchmark} & \textbf{Split} & \textbf{Samples} & \textbf{Metric} & \textbf{Gen Length} \\
+\textbf{Category} & \textbf{Benchmark} & \textbf{Split} & \textbf{Samples} & \textbf{Metric} \\
 \midrule
 \multirow{3}{*}{Knowledge}
-& MMLU-Pro       & test  & 12,032  & Accuracy    & 1024 \\
-& GPQA-Diamond   & train & 198     & Accuracy    & 1024 \\
-& TriviaQA       & val   & 17,944  & EM / F1     & 256  \\
+& MMLU-Pro       & test  & 12,032  & Accuracy    \\
+& GPQA-Diamond   & train & 198     & Accuracy    \\
+& TriviaQA       & val   & 17,944  & EM / F1     \\
 \midrule
 \multirow{4}{*}{Reasoning}
-& BIG-Bench Hard & test  & $\sim$6,500 & EM     & 512  \\
-& HellaSwag      & val   & 10,042  & Accuracy    & 256  \\
-& PIQA           & test  & 1,838   & Accuracy    & 256  \\
-& DROP           & val   & 9,535   & EM / F1     & 256  \\
+& BIG-Bench Hard & test  & $\sim$6,500 & EM     \\
+& HellaSwag      & val   & 10,042  & Accuracy    \\
+& PIQA           & test  & 1,838   & Accuracy    \\
+& DROP           & val   & 9,535   & EM / F1     \\
 \midrule
 \multirow{4}{*}{Math}
-& GSM-Plus         & testmini & 2,400 & EM (numeric) & 512  \\
-& CMATH            & test     & 1,098 & EM (numeric) & 512  \\
-& AIME 2025        & --       & 30    & EM (integer) & 16384 \\
-& OlympiadBench    & test     & 674   & Math match   & 1024 \\
+& GSM-Plus         & testmini & 2,400 & EM (numeric) \\
+& CMATH            & test     & 1,098 & EM (numeric) \\
+& AIME 2025        & --       & 30    & EM (integer) \\
+& OlympiadBench    & test     & 674   & Math match   \\
 \midrule
 \multirow{2}{*}{Coding}
-& HumanEval+ & --  & 164 & pass@1 & 512 \\
-& MBPP+      & --  & 378 & pass@1 & 512 \\
+& HumanEval+ & --  & 164 & pass@1 \\
+& MBPP+      & --  & 378 & pass@1 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -553,10 +558,74 @@ Table~\ref{tab:benchmark_details} lists all benchmarks used in our evaluation wi
 
 All remask-specific hyperparameters and their defaults are listed in the main text. Shared inference parameters follow LLaDA2.1 Q Mode: \texttt{threshold}$=0.7$, \texttt{editing\_threshold}$=0.5$, \texttt{block\_length}$=32$, \texttt{temperature}$=0.0$. The denoising inner loop runs until convergence (all masks filled and no edits/remasks triggered), not for a fixed number of steps.
 
-\section{Case Studies}
+\section{Case Study: Last-Mile Token Corruption on CMATH}
 \label{app:cases}
 
-\textit{[To be filled with specific examples showing T2T failure and T2M success after running experiments.]}
+We conduct a systematic error analysis on CMATH (1,097 elementary math problems) to understand \emph{why} \TtoM{} remasking improves accuracy. The majority of \TtoT{} errors are not reasoning failures but \emph{last-mile token corruption}---the model reasons correctly yet the final numeric answer is corrupted during denoising. \TtoM{} remasking substantially reduces such corruption while leaving genuine reasoning errors unchanged.
+
+\paragraph{The last-mile corruption problem.}
+Among the 188 errors made by \TtoT{} editing, we find that in \textbf{139 cases (73.9\%)} the model's step-by-step reasoning arrives at the correct numeric answer, yet the final output (the answer extracted for evaluation) is corrupted. Only 49 errors (26.1\%) are genuine reasoning mistakes.
+
+This corruption takes several characteristic forms: \textbf{extra digits appended} ($17 \to 177$), \textbf{leading or trailing digits dropped} ($31 \to 1$, $40 \to 4$), \textbf{answer marker repetition} (``the answer is the answer is\ldots''), and \textbf{single-digit substitution}.
+
+\paragraph{How remasking reduces corruption.}
+Table~\ref{tab:corruption} shows that \TtoM{} remasking reduces corruption cases by 47.5\% (139$\to$73) while genuine reasoning errors remain essentially unchanged (49$\to$51). This confirms that the accuracy improvement (+5.8\%) comes almost entirely from eliminating token-level denoising artifacts.
+
+\begin{table}[h]
+\centering
+\caption{Error breakdown on CMATH: \TtoT{} editing vs.\ \TtoM{} remasking (\textsc{LowProb}). ``Corruption'' denotes cases where the correct answer appears in the reasoning chain but the final extracted answer is wrong.}
+\label{tab:corruption}
+\vspace{4pt}
+\small
+\begin{tabular}{lcccc}
+\toprule
+& \textbf{Total Errors} & \textbf{Corruption} & \textbf{Genuine Reasoning} & \textbf{Accuracy} \\
+\midrule
+\TtoT{} editing   & 188  & 139 ~(73.9\%)  & 49 ~(26.1\%)  & 82.9\% \\
+\TtoM{} remasking  & 124  & ~73 ~(58.9\%)  & 51 ~(41.1\%)  & 88.7\% \\
+\midrule
+$\Delta$           & $-64$ & $-66$ ~($\downarrow$47.5\%) & $+2$ & $+5.8\%$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The most dramatic improvements are in the two dominant corruption types: extra-digit appending drops from 43 to 5 cases ($\downarrow$88\%), and answer-marker repetition is completely eliminated (11$\to$0).
+
+\paragraph{Representative examples.}
+Figure~\ref{fig:case_study} shows three representative cases. In each case the model performs correct arithmetic in its chain-of-thought, but \TtoT{} editing fails to prevent the final answer from being corrupted. \TtoM{} remasking, by resetting low-confidence tokens to \mask{} and re-predicting them, produces the correct final answer.
+
+\begin{figure}[h]
+\centering
+\small
+\setlength{\fboxsep}{6pt}
+\setlength{\fboxrule}{0.4pt}
+
+\noindent\fbox{\parbox{0.96\textwidth}{%
+\textbf{Case 1: Extra digits appended} \hfill Gold: \textbf{17}\\[3pt]
+\textit{Q: A fruit shop has 25 baskets of apples. Apples exceed pears by 8 baskets. How many baskets of pears are there?}\\[3pt]
+\textbf{\TtoT{}}: \quad Reasoning: $25 - 8 = 17$ ~\checkmark \quad$\to$\quad Final answer: \textcolor{red}{\textbf{177}} ~\ding{55}\\
+\textbf{\TtoM{}}: \quad Reasoning: $25 - 8 = 17$ ~\checkmark \quad$\to$\quad Final answer: \textcolor{teal}{\textbf{17}} ~\checkmark
+}}
+
+\vspace{6pt}
+\noindent\fbox{\parbox{0.96\textwidth}{%
+\textbf{Case 2: Leading digits dropped + answer marker repeated} \hfill Gold: \textbf{31}\\[3pt]
+\textit{Q: Xiaofang is 8 years old and her mother is 39. How many years younger is Xiaofang than her mother?}\\[3pt]
+\textbf{\TtoT{}}: \quad Reasoning: $39 - 8 = 31$ ~\checkmark \quad$\to$\quad ``The answer is the answer is \textcolor{red}{\textbf{1}}'' ~\ding{55}\\
+\textbf{\TtoM{}}: \quad Reasoning: $39 - 8 = 31$ ~\checkmark \quad$\to$\quad ``The answer is \textcolor{teal}{\textbf{31}}'' ~\checkmark
+}}
+
+\vspace{6pt}
+\noindent\fbox{\parbox{0.96\textwidth}{%
+\textbf{Case 3: Trailing digits dropped + answer marker repeated} \hfill Gold: \textbf{40}\\[3pt]
+\textit{Q: A shop received 20 baskets each of apples and pears. How many baskets of fruit were received in total?}\\[3pt]
+\textbf{\TtoT{}}: \quad Reasoning: $20 + 20 = 40$ ~\checkmark \quad$\to$\quad ``The answer is the answer is the answer is \textcolor{red}{\textbf{4}}'' ~\ding{55}\\
+\textbf{\TtoM{}}: \quad Reasoning: $20 + 20 = 40$ ~\checkmark \quad$\to$\quad ``The answer is \textcolor{teal}{\textbf{40}}'' ~\checkmark
+}}
+
+\caption{Representative CMATH cases illustrating last-mile token corruption. In all three examples, both methods produce correct chain-of-thought reasoning, but \TtoT{} editing generates a corrupted final answer---with extra digits, dropped digits, or repeated answer markers---while \TtoM{} remasking outputs the correct result. The answer marker phrases shown are translated from the Chinese originals for readability.}
+\label{fig:case_study}
+\end{figure}
 
 %=============================================================================
 \newpage

@@ -9,7 +9,7 @@ export http_proxy="100.68.162.212:3128"
 ENV="${CONDA_ENV:-remask}"
 EVAL="eval.bbh"
 OUT="results_v2/bbh"
-BSZ=64
+BSZ=16
 SHARDS=8
 BENCHMARK="bbh"
 
