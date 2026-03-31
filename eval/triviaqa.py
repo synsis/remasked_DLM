@@ -73,7 +73,9 @@ def _flush(summary_path, tag, args, results, t0, batch_size, done=False):
     with open(summary_path, "w") as f:
         summary = dict(
             benchmark="triviaqa", tag=tag, mode=args.mode,
-            em=mean_em, f1=mean_f1, accuracy=mean_em,
+            avg_em=mean_em, avg_f1=mean_f1,
+            accuracy=mean_em,
+            correct=sum(1 for r in results if r.get("em", 0) >= 1.0 - 1e-9),
             total=total, time_s=elapsed, done=done,
         )
         summary.update(gen_params_dict(args))

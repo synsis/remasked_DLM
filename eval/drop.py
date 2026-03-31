@@ -27,7 +27,9 @@ from eval.common import (
 )
 
 PROMPT_TPL = (
-    "Read the passage and answer the question.\n\n"
+    "Read the passage and answer the question. "
+    "Give only the final answer as briefly as possible (a number, name, or short phrase). "
+    'Use the format "The answer is <answer>".\n\n'
     "Passage: {passage}\n\nQuestion: {question}\n\nAnswer:"
 )
 
@@ -85,8 +87,9 @@ def _flush(summary_path, tag, args, results, t0, batch_size, done=False):
     with open(summary_path, "w") as f:
         summary = dict(
             benchmark="drop", tag=tag, mode=args.mode,
-            main_metric="f1", em=avg_em, f1=avg_f1,
-            accuracy=avg_f1, correct=em_correct, total=total,
+            main_metric="f1", avg_em=avg_em, avg_f1=avg_f1,
+            accuracy=em_correct / total if total else 0.0,
+            correct=em_correct, total=total,
             time_s=elapsed, done=done,
         )
         summary.update(gen_params_dict(args))

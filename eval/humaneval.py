@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 from remask import load_remask_model, load_original_model
 from remask.utils import format_chat_prompt, tokenize_prompt, extract_code_block
-from eval.common import add_parallel_args, shard_dataset
+from eval.common import add_parallel_args, shard_dataset, output_paths, gen_params_dict
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 
@@ -61,8 +61,11 @@ def run(args):
 
     os.makedirs(args.output_dir, exist_ok=True)
     shard_sfx = f"_shard{args.shard_id}" if args.num_shards > 1 else ""
-    out_path = os.path.join(args.output_dir, f"{tag}{shard_sfx}_samples.jsonl")
+    samples_path = os.path.join(args.output_dir, f"{tag}{shard_sfx}_samples.jsonl")
+    results_path, summary_path = output_paths(args.output_dir, tag, args)
+
     results = []
+    samples = []
     t0 = time.time()
 
     for tid, prob in tqdm(problems.items(), desc=f"HumanEval+ [{tag}]"):
@@ -80,16 +83,31 @@ def run(args):
         )
         comp = tokenizer.decode(out[0], skip_special_tokens=True)
         sol = extract_code_block(comp) if args.instruct else prob["prompt"] + comp
-        results.append({"task_id": tid, "solution": sol})
+        samples.append({"task_id": tid, "solution": sol})
+        results.append({"task_id": tid, "solution": sol, "correct": None})
 
     elapsed = time.time() - t0
     print(f"Done in {elapsed:.0f}s ({elapsed/len(results):.1f}s/prob)")
 
-    with open(out_path, "w") as f:
+    with open(samples_path, "w") as f:
+        for r in samples:
+            f.write(json.dumps(r) + "\n")
+    with open(results_path, "w") as f:
         for r in results:
             f.write(json.dumps(r) + "\n")
-    print(f"Saved → {out_path}")
-    print(f"Evaluate: evalplus.evaluate --dataset humaneval --samples {out_path}")
+
+    summary = dict(
+        benchmark="humaneval", tag=tag, mode=args.mode,
+        total=len(results), time_s=elapsed,
+        done=True, needs_evalplus=True,
+        **gen_params_dict(args),
+    )
+    with open(summary_path, "w") as f:
+        json.dump(summary, f, indent=2)
+
+    print(f"Saved → {samples_path}")
+    print(f"Saved → {results_path}")
+    print(f"Evaluate: evalplus.evaluate --dataset humaneval --samples {samples_path}")
 
 
 if __name__ == "__main__":
