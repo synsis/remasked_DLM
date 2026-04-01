@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════
-#  通用多卡 shard 并行 eval 脚本 (v2: 支持选择 mode)
+#  通用多卡 shard 并行 eval 脚本 (v2: 支持选择 mode, OOM 自动重试)
 #  用法:
-#    bash run_eval_8gpu2.sh <dataset> [bsz] [ngpu] [original|remask|all]
+#    bash run_eval_8gpu2.sh <dataset> [bsz] [ngpu] [original|remask|all] [gen_length]
 #
 #  例子:
-#    bash run_eval_8gpu2.sh hellaswag                  # bsz=16, 全部GPU, all
-#    bash run_eval_8gpu2.sh drop 32 8 all              # bsz=32, 8卡, 两个都跑
-#    bash run_eval_8gpu2.sh bbh 16 8 remask            # bsz=16, 8卡, 只跑remask
-#    bash run_eval_8gpu2.sh mmlu_pro 16 4 original     # bsz=16, 4卡, 只跑original
-#    bash run_eval_8gpu2.sh humaneval 1 4 remask       # 代码任务, 只跑remask
+#    bash run_eval_8gpu2.sh hellaswag                       # bsz=16, 全部GPU, all
+#    bash run_eval_8gpu2.sh drop 32 8 all                   # bsz=32, 8卡, 两个都跑
+#    bash run_eval_8gpu2.sh bbh 16 8 remask                 # bsz=16, 8卡, 只跑remask
+#    bash run_eval_8gpu2.sh mmlu_pro 16 4 original          # bsz=16, 4卡, 只跑original
+#    bash run_eval_8gpu2.sh humaneval 1 4 remask            # 代码任务, 只跑remask
+#    bash run_eval_8gpu2.sh bbh 128 8 remask 8192           # 指定 gen_length=8192
+#
+#  OOM 自动重试: shard OOM 后自动减半 bsz 重跑, 直到成功或 bsz<1
 #
 #  支持的 dataset: cmath, gsm_plus, piqa, hellaswag, triviaqa, drop, bbh,
 #    aime2025, humaneval, mbpp, mmlu_pro, gpqa, ifeval, bfcl
@@ -26,10 +29,11 @@ export https_proxy="100.68.162.212:3128"
 export http_proxy="100.68.162.212:3128"
 export HF_TOKEN="${HF_TOKEN:-}"
 
-DATASET="${1:?用法: bash run_eval_8gpu2.sh <dataset> [bsz] [ngpu] [original|remask|all]}"
+DATASET="${1:?用法: bash run_eval_8gpu2.sh <dataset> [bsz] [ngpu] [original|remask|all] [gen_length]}"
 BSZ="${2:-16}"
 NGPU="${3:-0}"  # 0 = 自动检测全部
 RUN_MODE="${4:-all}"  # original / remask / all
+GEN_LENGTH="${5:-}"   # 空 = 用 eval 脚本默认值 (16384)
 ENV="${CONDA_ENV:-remask}"
 OUT="results_v2/${DATASET}"
 
@@ -45,9 +49,31 @@ if [ "$NGPU" -gt 0 ] && [ "$NGPU" -lt "${#ALL_GPUS[@]}" ]; then
   ALL_GPUS=("${ALL_GPUS[@]:0:$NGPU}")
 fi
 SHARDS=${#ALL_GPUS[@]}
-echo "Dataset: $DATASET  BSZ: $BSZ  GPUs: $SHARDS (${ALL_GPUS[*]})  Mode: $RUN_MODE"
+
+GEN_LEN_ARGS=""
+[ -n "$GEN_LENGTH" ] && GEN_LEN_ARGS="--gen_length $GEN_LENGTH"
+
+echo "Dataset: $DATASET  BSZ: $BSZ  GPUs: $SHARDS (${ALL_GPUS[*]})  Mode: $RUN_MODE  gen_length: ${GEN_LENGTH:-default}"
 
 mkdir -p "$OUT"
+
+is_oom() {
+  grep -q "OutOfMemoryError\|CUDA out of memory" "$1" 2>/dev/null
+}
+
+launch_shard() {
+  local gpu_id=$1 shard_id=$2 bsz=$3 mode=$4 extra_args="$5" logfile="$6"
+  CUDA_VISIBLE_DEVICES=$gpu_id PYTHONUNBUFFERED=1 conda run -n $ENV \
+    python -u -m eval.${DATASET} \
+      --output_dir "$OUT" \
+      --mode "$mode" \
+      --batch_size $bsz \
+      --shard_id $shard_id \
+      --num_shards $SHARDS \
+      $GEN_LEN_ARGS \
+      $extra_args \
+    > "$logfile" 2>&1
+}
 
 run_mode() {
   local mode=$1
@@ -55,36 +81,78 @@ run_mode() {
   echo ""
   echo "========== $DATASET  mode=$mode  bsz=$BSZ  shards=$SHARDS =========="
 
+  # --- 第一轮: 全部 shard 并行 ---
   pids=()
   for ((i=0; i<SHARDS; i++)); do
     gpu_id=${ALL_GPUS[$i]}
-    echo "[GPU $gpu_id] shard $i/$SHARDS  mode=$mode"
-    CUDA_VISIBLE_DEVICES=$gpu_id conda run -n $ENV \
-      python -m eval.${DATASET} \
-        --output_dir "$OUT" \
-        --mode "$mode" \
-        --batch_size $BSZ \
-        --shard_id $i \
-        --num_shards $SHARDS \
-        $extra_args \
-      > "$OUT/${mode}_shard${i}.log" 2>&1 &
+    echo "[GPU $gpu_id] shard $i/$SHARDS  mode=$mode  bsz=$BSZ"
+    launch_shard "$gpu_id" "$i" "$BSZ" "$mode" "$extra_args" "$OUT/${mode}_shard${i}.log" &
     pids+=($!)
   done
 
-  failed=0
+  # 收集结果, 记录 OOM 的 shard
+  oom_shards=()
+  ok=0
+  non_oom_fail=0
   for ((i=0; i<SHARDS; i++)); do
     wait "${pids[$i]}" 2>/dev/null || true
     ec=$?
     gpu_id=${ALL_GPUS[$i]}
-    if [ $ec -ne 0 ]; then
-      echo "[GPU $gpu_id] shard $i FAILED exit=$ec  (see $OUT/${mode}_shard${i}.log)"
-      failed=$((failed + 1))
-    else
+    if [ $ec -eq 0 ]; then
       echo "[GPU $gpu_id] shard $i done"
+      ok=$((ok + 1))
+    elif is_oom "$OUT/${mode}_shard${i}.log"; then
+      echo "[GPU $gpu_id] shard $i OOM (bsz=$BSZ)"
+      oom_shards+=($i)
+    else
+      echo "[GPU $gpu_id] shard $i FAILED exit=$ec (non-OOM, see $OUT/${mode}_shard${i}.log)"
+      non_oom_fail=$((non_oom_fail + 1))
     fi
   done
-  echo "mode=$mode: $((SHARDS - failed))/$SHARDS shards succeeded"
-  [ $failed -gt 0 ] && echo "WARNING: $failed shards failed. 降低 bsz 重跑: bash $0 $DATASET $((BSZ/2))"
+
+  # --- OOM 重试: 每轮减半 bsz, OOM 的 shard 并行重跑 ---
+  local retry_bsz=$BSZ
+  while [ ${#oom_shards[@]} -gt 0 ]; do
+    retry_bsz=$((retry_bsz / 2))
+    if [ $retry_bsz -lt 1 ]; then
+      echo "ERROR: bsz reduced to 0, giving up on shards: ${oom_shards[*]}"
+      non_oom_fail=$((non_oom_fail + ${#oom_shards[@]}))
+      break
+    fi
+    echo ""
+    echo "--- OOM retry: shards [${oom_shards[*]}]  bsz=$retry_bsz ---"
+
+    retry_pids=()
+    retry_indices=("${oom_shards[@]}")
+    oom_shards=()
+    for i in "${retry_indices[@]}"; do
+      gpu_id=${ALL_GPUS[$i]}
+      echo "[GPU $gpu_id] shard $i retrying  bsz=$retry_bsz"
+      launch_shard "$gpu_id" "$i" "$retry_bsz" "$mode" "$extra_args" "$OUT/${mode}_shard${i}.log" &
+      retry_pids+=($!)
+    done
+
+    for idx in "${!retry_indices[@]}"; do
+      i=${retry_indices[$idx]}
+      wait "${retry_pids[$idx]}" 2>/dev/null || true
+      ec=$?
+      gpu_id=${ALL_GPUS[$i]}
+      if [ $ec -eq 0 ]; then
+        echo "[GPU $gpu_id] shard $i done (bsz=$retry_bsz)"
+        ok=$((ok + 1))
+      elif is_oom "$OUT/${mode}_shard${i}.log"; then
+        echo "[GPU $gpu_id] shard $i OOM again (bsz=$retry_bsz)"
+        oom_shards+=($i)
+      else
+        echo "[GPU $gpu_id] shard $i FAILED exit=$ec (non-OOM)"
+        non_oom_fail=$((non_oom_fail + 1))
+      fi
+    done
+  done
+
+  local total_fail=$((non_oom_fail))
+  echo "mode=$mode: $ok/$SHARDS shards succeeded"
+  [ $total_fail -gt 0 ] && echo "WARNING: $total_fail shards failed (non-OOM or bsz exhausted)"
 }
 
 merge() {

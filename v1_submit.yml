@@ -1,0 +1,28 @@
+TaskName: "LLM-mj-llada-remask-training"
+
+Storages:
+  - Type: "Vepfs"
+    MountPath: "/vepfs-mlp2/c20250506/251105017"
+    SubPath: "/c20250506/251105017"
+
+Entrypoint: "
+cd /vepfs-mlp2/c20250506/251105017/yaolin/new_llada2.1_infer_remask
+export HF_TOKEN=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
+bash run_eval_8gpu2.sh bbh 4 0 remask
+"
+
+Tags: [LLM, yl, llada, remask, debug]
+ImageUrl: "cr-mlp-cn-beijing.cr.volces.com/public/yl_dllm:1.0"
+Framework: "Custom"
+ResourceQueueName: "c20250506"
+
+TaskRoleSpecs:
+  - RoleName: "worker"
+    RoleReplicas: 1
+    Flavor: "ml.pni2.14xlarge"
+
+ActiveDeadlineSeconds: 7200
+DelayExitTimeSeconds: 0
+AccessType: "Private"
+Preemptible: true
+Priority: 6
