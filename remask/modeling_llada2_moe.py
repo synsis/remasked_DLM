@@ -1489,14 +1489,26 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
         eos_id: int = 156892,
         mask_id: int = 156895,
         num_to_transfer: int = 1,
+        prefill_mode: str = "max",
     ) -> List[torch.Tensor]:
         """Batched generation with KV prefix caching.
 
-        Key optimizations over the original:
-        1. KV cache for completed blocks — inner loop only forwards current block
-        2. lm_head only on current block positions (not entire sequence)
-        3. EOS-aware early stop inside inner loop and between blocks
-        4. Fixed attention mask broadcasting for batch_size > 1
+        Args:
+            prefill_mode: ``"max"`` (default) builds the KV cache for all
+                prompts in one forward pass up to ``max(prompt_lengths)``,
+                with proper padding & attention masking.  Matches single-
+                sample behaviour.  ``"min"`` uses the legacy incremental
+                prefill starting from ``min(prompt_lengths)`` (faster when
+                prompt lengths vary a lot, but short prompts see extra mask
+                tokens in context which may change results).
+
+        When ``prefill_mode="max"``, the sequence layout per sample is::
+
+            [prompt_i | PAD..PAD | MASK..MASK (gen_length)]
+            |<--plen->|<-align-->|<---- generation ----->|
+            |<--- max_prompt --->|
+
+        Padding uses BOS (id 156891) with ``-inf`` attention masking.
         """
         batch_size = len(inputs_list)
         if batch_size == 0:
@@ -1512,9 +1524,12 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
                 num_to_transfer=num_to_transfer,
             )]
 
+        use_max_prefill = (prefill_mode == "max")
+
         self._gen_forward_count = 0
         _gen_t0 = time.time()
         steps = min(steps, gen_length // minimal_topk)
+        _PAD = 156891  # <|startoftext|> — not mask, not eos
 
         prompt_lengths = [inp.shape[1] for inp in inputs_list]
         max_prompt_length = max(prompt_lengths)
@@ -1532,15 +1547,46 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
             (batch_size, total_length), mask_id,
             dtype=torch.long, device=self.device,
         )
+        is_pad = torch.zeros(
+            batch_size, total_length, dtype=torch.bool, device=self.device,
+        )
         for i, inp in enumerate(inputs_list):
             plen = inp.shape[1]
             x[i, :plen] = inp[0].to(self.device)
+            if use_max_prefill and plen < max_prompt_length:
+                x[i, plen:max_prompt_length] = _PAD
+                is_pad[i, plen:max_prompt_length] = True
 
         sample_done = torch.zeros(batch_size, dtype=torch.bool, device=self.device)
         min_prefill = min(pl // block_length for pl in prompt_lengths)
+        max_prefill = max(pl // block_length for pl in prompt_lengths)
+        prefill_blocks = max_prefill if use_max_prefill else min_prefill
         kv_cache = None
 
-        for num_block in range(min_prefill, num_blocks):
+        # ---- One-shot prompt prefill (max mode) ----
+        if use_max_prefill and prefill_blocks > 0:
+            prefill_end = prefill_blocks * block_length
+            pf_x = x[:, :prefill_end]
+            nb = prefill_blocks
+            bm = torch.tril(torch.ones(nb, nb, device=self.device))
+            pf_attn = (
+                bm.repeat_interleave(block_length, 0)
+                  .repeat_interleave(block_length, 1)
+                .unsqueeze(0).unsqueeze(0)
+                .to(torch.bfloat16)
+                .expand(batch_size, -1, -1, -1)
+                .clone()
+            )
+            pad_cols = is_pad[:, :prefill_end]
+            if pad_cols.any():
+                pf_attn.masked_fill_(pad_cols[:, None, None, :], float('-inf'))
+            pf_pos = position_ids[:, :prefill_end]
+            _, kv_cache = self._forward_block(
+                pf_x, pf_pos, pf_attn, None, block_length,
+            )
+
+        # ---- Block-by-block generation ----
+        for num_block in range(prefill_blocks, num_blocks):
             if sample_done.all():
                 break
 
@@ -1548,22 +1594,30 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
             block_start = num_block * block_length
             prefix_len = block_start
 
+            # Prompt + padding positions are non-editable.
             prompt_masks_in_block = []
             for i in range(batch_size):
                 pmask = torch.zeros(
                     block_length, dtype=torch.bool, device=self.device,
                 )
-                if block_start < prompt_lengths[i]:
-                    end = min(prompt_lengths[i] - block_start, block_length)
-                    pmask[:end] = True
+                for j in range(block_length):
+                    pos = block_start + j
+                    if pos < prompt_lengths[i] or is_pad[i, pos]:
+                        pmask[j] = True
                 prompt_masks_in_block.append(pmask)
+
+            # Done samples: fill block with eos, skip generation.
+            for i in range(batch_size):
+                if sample_done[i]:
+                    x[i, block_start:current_window_end] = eos_id
+                    is_pad[i, block_start:current_window_end] = True
 
             post_steps = torch.zeros(batch_size, dtype=torch.long, device=self.device)
             block_converged = sample_done.clone()
 
             cache_valid = (
                 kv_cache is not None
-                and kv_cache.get_seq_length() == prefix_len
+                and kv_cache.get_seq_length() >= prefix_len
                 and prefix_len > 0
             )
 
@@ -1581,7 +1635,8 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
                     for i in range(batch_size):
                         if block_converged[i] or not no_masks[i]:
                             continue
-                        gp = x[i, prompt_lengths[i]:current_window_end]
+                        gi = max_prompt_length if use_max_prefill else prompt_lengths[i]
+                        gp = x[i, gi:current_window_end]
                         if (gp == eos_id).any():
                             block_converged[i] = True
 
@@ -1600,7 +1655,11 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
                         .unsqueeze(0).unsqueeze(0)
                         .to(torch.bfloat16)
                         .expand(batch_size, -1, -1, -1)
+                        .clone()
                     )
+                    pad_cols = is_pad[:, :current_window_end]
+                    if pad_cols.any():
+                        cur_attn.masked_fill_(pad_cols[:, None, None, :], float('-inf'))
                     cur_pos = position_ids[:, :current_window_end]
 
                     active_logits, kv_cache = self._forward_block(
@@ -1616,6 +1675,11 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
                         batch_size, 1, block_length, prefix_len + block_length,
                         dtype=torch.bfloat16, device=self.device,
                     )
+                    prefix_pad = is_pad[:, :prefix_len]
+                    block_pad = is_pad[:, block_start:current_window_end]
+                    full_pad = torch.cat([prefix_pad, block_pad], dim=1)
+                    if full_pad.any():
+                        cache_attn.masked_fill_(full_pad[:, None, None, :], float('-inf'))
 
                     active_logits, kv_cache = self._forward_block(
                         block_ids, block_pos, cache_attn, kv_cache, block_length,
@@ -1668,23 +1732,27 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
                     if active_block_mask[i].sum() == 0 and should_break:
                         block_converged[i] = True
 
+            # ---- EOS early stop between blocks ----
             if eos_early_stop:
                 for i in range(batch_size):
                     if sample_done[i]:
                         continue
-                    gen_part = x[i, prompt_lengths[i]:current_window_end]
+                    gi = max_prompt_length if use_max_prefill else prompt_lengths[i]
+                    gen_part = x[i, gi:current_window_end]
                     if (gen_part == mask_id).sum() == 0:
                         eos_pos = (gen_part == eos_id).nonzero(as_tuple=True)[0]
                         if len(eos_pos) > 0:
                             sample_done[i] = True
+                            x[i, current_window_end:] = eos_id
+                            is_pad[i, current_window_end:] = True
 
         results = []
         for i in range(batch_size):
-            plen = prompt_lengths[i]
-            gen_tokens = x[i, plen : plen + gen_length]
+            gi = max_prompt_length if use_max_prefill else prompt_lengths[i]
+            gen_tokens = x[i, gi : gi + gen_length]
             eos_pos = (gen_tokens == eos_id).nonzero(as_tuple=True)[0]
             end = eos_pos[0].item() + 1 if len(eos_pos) > 0 else gen_length
-            results.append(x[i, plen : plen + end].unsqueeze(0))
+            results.append(x[i, gi : gi + end].unsqueeze(0))
 
         _total_tokens = sum(r.shape[1] for r in results)
         _avg_tokens = _total_tokens / len(results) if results else 0
