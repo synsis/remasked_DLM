@@ -1265,6 +1265,9 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
         if final_transfer_index.any():
             cur_x[:, -block_length:][final_transfer_index] = x0[final_transfer_index]
 
+        if hasattr(self, '_gen_t2t_edit_count'):
+            self._gen_t2t_edit_count += editing_transfer_index.sum().item()
+
         return not editing_transfer_index.any()
 
     @staticmethod
@@ -1316,6 +1319,7 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
         3. EOS-aware early stop inside inner loop (skips unnecessary post-steps)
         """
         self._gen_forward_count = 0
+        self._gen_t2t_edit_count = 0
         _gen_t0 = time.time()
         steps = min(steps, gen_length // minimal_topk)
         input_ids = inputs.to(self.device)
@@ -1468,6 +1472,7 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
             'tpf': _out_len / max(1, _fwd),
             'wall_time_s': _wall,
             'tps': _out_len / max(1e-9, _wall),
+            't2t_edits': self._gen_t2t_edit_count,
         }
         return result
 
@@ -1527,6 +1532,7 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
         use_max_prefill = (prefill_mode == "max")
 
         self._gen_forward_count = 0
+        self._gen_t2t_edit_count = 0
         _gen_t0 = time.time()
         steps = min(steps, gen_length // minimal_topk)
         _PAD = 156891  # <|startoftext|> — not mask, not eos
@@ -1766,5 +1772,6 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
             'tpf': _avg_tokens / max(1, _fwd),
             'wall_time_s': _wall,
             'tps': _total_tokens / max(1e-9, _wall),
+            't2t_edits': self._gen_t2t_edit_count,
         }
         return results

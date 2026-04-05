@@ -17,7 +17,7 @@ import sys
 configs = []
 cid = 0
 configs.append((cid, "original", "", "", 3, 0.25)); cid += 1
-for strategy, taus in [("low_prob", [0.3,0.5,0.7,0.9]),
+for strategy, taus in [("low_prob", [0.1,0.3,0.5,0.7,0.9]),
                         ("t2t_remask", [0.5,0.7,0.9]),
                         ("logit_diff", [0.1,0.2,0.3,0.5])]:
     for tau in taus:

@@ -82,6 +82,8 @@ def _attach_gen_stats(r, model):
         r['_output_tokens'] = stats.get('output_tokens')
         if 'remask_total' in stats:
             r['_remask_total'] = stats['remask_total']
+        if 't2t_edits' in stats:
+            r['_t2t_edits'] = stats['t2t_edits']
 
 
 def aggregate_gen_stats(results):
@@ -91,6 +93,7 @@ def aggregate_gen_stats(results):
     fwds = [r['_forward_passes'] for r in results if r.get('_forward_passes') is not None]
     toks = [r['_output_tokens'] for r in results if r.get('_output_tokens') is not None]
     remasks = [r['_remask_total'] for r in results if r.get('_remask_total') is not None]
+    t2t_edits = [r['_t2t_edits'] for r in results if r.get('_t2t_edits') is not None]
     agg = {}
     if tpfs:
         agg['avg_tpf'] = sum(tpfs) / len(tpfs)
@@ -105,6 +108,9 @@ def aggregate_gen_stats(results):
     if remasks:
         agg['avg_remask_total'] = sum(remasks) / len(remasks)
         agg['total_remask'] = sum(remasks)
+    if t2t_edits:
+        agg['avg_t2t_edits'] = sum(t2t_edits) / len(t2t_edits)
+        agg['total_t2t_edits'] = sum(t2t_edits)
     return agg
 
 

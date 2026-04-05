@@ -14,7 +14,7 @@ get_tag() {
 configs = []
 cid = 0
 configs.append((cid, 'original', '', '', 3, 0.25)); cid += 1
-for s, ts in [('low_prob',[0.3,0.5,0.7,0.9]),('t2t_remask',[0.5,0.7,0.9]),('logit_diff',[0.1,0.2,0.3,0.5])]:
+for s, ts in [('low_prob',[0.1,0.3,0.5,0.7,0.9]),('t2t_remask',[0.5,0.7,0.9]),('logit_diff',[0.1,0.2,0.3,0.5])]:
     for t in ts:
         for c in [1,3,5]:
             for r in [0.25,0.50,1.0]:
@@ -25,7 +25,7 @@ print(tag)
 "
 }
 
-for ((i=0; i<100; i++)); do
+for ((i=0; i<109; i++)); do
   TAG=$(get_tag $i)
 
   # Skip if already done
