@@ -30,7 +30,9 @@ def get_gold(ex):
 def run_tag(args):
     if args.mode == "original":
         return "original"
-    return f"remask_{args.strategy}_{args.remask_threshold}"
+    c = getattr(args, 'max_remask_per_pos', 3)
+    r = getattr(args, 'max_remask_ratio', 0.25)
+    return f"remask_{args.strategy}_{args.remask_threshold}_c{c}_r{r}"
 
 
 def load_cmath():
@@ -64,12 +66,21 @@ def run(args):
     else:
         model, tokenizer, mask_id = load_remask_model(
             args.model_path, strategy=args.strategy,
-            remask_threshold=args.remask_threshold)
+            remask_threshold=args.remask_threshold,
+            max_remask_per_pos=getattr(args, 'max_remask_per_pos', 3),
+            max_remask_ratio=getattr(args, 'max_remask_ratio', 0.25))
 
     dataset = load_cmath()
     print(f"cmath: {len(dataset)} problems")
     if args.max_samples:
-        dataset = dataset.select(range(min(args.max_samples, len(dataset))))
+        if args.sample_seed is not None:
+            import random
+            random.seed(args.sample_seed)
+            indices = sorted(random.sample(range(len(dataset)), min(args.max_samples, len(dataset))))
+            dataset = dataset.select(indices)
+            print(f"  random sampled {len(dataset)} with seed={args.sample_seed}")
+        else:
+            dataset = dataset.select(range(min(args.max_samples, len(dataset))))
     dataset = shard_dataset(dataset, args)
 
     run_eval(model, tokenizer, mask_id, list(dataset), args, tag, "cmath",
@@ -90,5 +101,9 @@ if __name__ == "__main__":
     p.add_argument("--editing_threshold", type=float, default=0.5)
     p.add_argument("--temperature", type=float, default=0.0)
     p.add_argument("--max_samples", type=int, default=None)
+    p.add_argument("--max_remask_per_pos", type=int, default=3)
+    p.add_argument("--max_remask_ratio", type=float, default=0.25)
+    p.add_argument("--sample_seed", type=int, default=None,
+                   help="If set, randomly sample max_samples from dataset with this seed")
     add_parallel_args(p)
     run(p.parse_args())

@@ -186,7 +186,7 @@ A confidence drop indicates that, as surrounding positions get filled or correct
 
 Unrestricted remasking could lead to oscillation (repeatedly remasking and re-predicting the same positions). We employ two safeguards:
 
-\paragraph{Per-position remask budget.} Each position $i$ maintains a counter $c_i$, incremented each time it is remasked. Remasking is blocked when $c_i \geq C_{\max}$ (default $C_{\max} = 5$), preventing infinite cycles.
+\paragraph{Per-position remask budget.} Each position $i$ maintains a counter $c_i$, incremented each time it is remasked. Remasking is blocked when $c_i \geq C_{\max}$ (default $C_{\max} = 3$), preventing infinite cycles.
 
 \paragraph{Remask ratio cap.} At each step, at most a fraction $\rho_{\max}$ (default $\rho_{\max} = 0.25$) of editable positions may be remasked. When more positions are flagged, we prioritize those with the lowest confidence scores (strategy-dependent), ensuring the most suspect tokens are addressed first.
 
@@ -360,7 +360,7 @@ Our approach offers principled advantages over existing remasking methods along 
 
 \paragraph{Inference hyperparameters.} We adopt LLaDA2.1's recommended Quality Mode (Q Mode) settings: M2T confidence threshold $\tau_{\text{m2t}} = 0.7$, T2T editing threshold $\tau_{\text{t2t}} = 0.5$, block length $B = 32$, temperature $= 0.0$ (greedy), and $\texttt{eos\_early\_stop} = \text{True}$. Generation length is set per-benchmark (see Appendix~\ref{app:benchmarks}).
 
-\paragraph{Remask hyperparameters.} For \TtoM{} strategies, we use the following default thresholds (tuned on a 50-sample subset of GSM-Plus): \textsc{LowProb} $\tau_{\textsc{lp}} = 0.5$, \textsc{T2T-Remask} $\tau_{\textsc{tr}} = 0.9$, \textsc{LogitDiff} $\tau_{\textsc{ld}} = 0.3$. Safety parameters: $C_{\max} = 5$ (per-position budget), $\rho_{\max} = 0.25$ (ratio cap).
+\paragraph{Remask hyperparameters.} For \TtoM{} strategies, we use the following default thresholds (tuned on a 50-sample subset of GSM-Plus): \textsc{LowProb} $\tau_{\textsc{lp}} = 0.5$, \textsc{T2T-Remask} $\tau_{\textsc{tr}} = 0.9$, \textsc{LogitDiff} $\tau_{\textsc{ld}} = 0.3$. Safety parameters: $C_{\max} = 3$ (per-position budget), $\rho_{\max} = 0.25$ (ratio cap).
 
 \paragraph{Baselines.} Our primary comparison is between the original \TtoT{} editing (``Original'') and our three \TtoM{} strategies, all using the same model and inference parameters. This controlled comparison isolates the effect of the editing mechanism.
 
@@ -436,11 +436,11 @@ We ablate the per-position budget $C_{\max}$ and ratio cap $\rho_{\max}$ on GSM-
 \toprule
 \textbf{Configuration} & \textbf{Accuracy} & \textbf{Avg. Time (s)} \\
 \midrule
-$C_{\max}=5$, $\rho_{\max}=0.25$ (default) & -- & -- \\
-$C_{\max}=3$, $\rho_{\max}=0.25$            & -- & -- \\
+$C_{\max}=3$, $\rho_{\max}=0.25$ (default) & -- & -- \\
+$C_{\max}=5$, $\rho_{\max}=0.25$            & -- & -- \\
 $C_{\max}=\infty$, $\rho_{\max}=0.25$       & -- & -- \\
-$C_{\max}=5$, $\rho_{\max}=0.50$            & -- & -- \\
-$C_{\max}=5$, $\rho_{\max}=1.0$             & -- & -- \\
+$C_{\max}=3$, $\rho_{\max}=0.50$            & -- & -- \\
+$C_{\max}=3$, $\rho_{\max}=1.0$             & -- & -- \\
 \bottomrule
 \end{tabular}
 \end{table}
