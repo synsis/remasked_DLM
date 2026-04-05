@@ -22,3 +22,5 @@ Thumbs.db
 
 # Logs
 *.log
+data/datasets
+data/hub

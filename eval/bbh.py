@@ -40,7 +40,8 @@ def load_bbh():
         return concatenate_datasets(parts)
     except Exception as e1:
         try:
-            return load_dataset("maveriq/bigbenchhard", split="train")
+            return load_dataset("maveriq/bigbenchhard", split="train",
+                                trust_remote_code=True)
         except Exception as e2:
             raise RuntimeError(
                 f"BBH load failed (lukaemon/bbh: {e1}; maveriq/bigbenchhard: {e2})"

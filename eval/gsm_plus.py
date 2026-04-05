@@ -113,9 +113,10 @@ def run(args):
         print(f"  shard {args.shard_id}/{args.num_shards}: {len(dataset)} samples")
 
     os.makedirs(args.output_dir, exist_ok=True)
+    bsz_suffix = f"_bsz{args.batch_size}"
     shard_suffix = f"_shard{args.shard_id}" if args.num_shards > 1 else ""
-    out_path = os.path.join(args.output_dir, f"{tag}{shard_suffix}_results.jsonl")
-    summary_path = os.path.join(args.output_dir, f"{tag}{shard_suffix}_summary.json")
+    out_path = os.path.join(args.output_dir, f"{tag}{bsz_suffix}{shard_suffix}_results.jsonl")
+    summary_path = os.path.join(args.output_dir, f"{tag}{bsz_suffix}{shard_suffix}_summary.json")
 
     correct = total = 0
     results = []

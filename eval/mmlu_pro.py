@@ -58,7 +58,8 @@ def run(args):
             max_remask_per_pos=getattr(args, "max_remask_per_pos", 3),
             max_remask_ratio=getattr(args, "max_remask_ratio", 0.25))
 
-    dataset = load_dataset("TIGER-Lab/MMLU-Pro", split="test")
+    hf_token = os.environ.get("HF_TOKEN", None)
+    dataset = load_dataset("TIGER-Lab/MMLU-Pro", split="test", token=hf_token)
     print(f"MMLU-Pro: {len(dataset)} problems")
     if args.max_samples:
         dataset = dataset.select(range(min(args.max_samples, len(dataset))))

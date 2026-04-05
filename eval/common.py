@@ -141,10 +141,12 @@ def shard_dataset(dataset, args):
 
 
 def output_paths(output_dir, tag, args):
-    """Return (results_jsonl_path, summary_json_path) with shard suffix if needed."""
+    """Return (results_jsonl_path, summary_json_path) with bsz and shard in filename."""
+    bsz = getattr(args, "batch_size", 1)
+    bsz_suffix = f"_bsz{bsz}"
     shard_suffix = f"_shard{args.shard_id}" if args.num_shards > 1 else ""
-    results_path = os.path.join(output_dir, f"{tag}{shard_suffix}_results.jsonl")
-    summary_path = os.path.join(output_dir, f"{tag}{shard_suffix}_summary.json")
+    results_path = os.path.join(output_dir, f"{tag}{bsz_suffix}{shard_suffix}_results.jsonl")
+    summary_path = os.path.join(output_dir, f"{tag}{bsz_suffix}{shard_suffix}_summary.json")
     return results_path, summary_path
 
 
