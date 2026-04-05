@@ -5,6 +5,7 @@ cd "$(dirname "$0")/.."
 
 VOLC=~/.volc/bin/volc
 TMP_YML="/tmp/_abl.yml"
+rm -rf results_v2/ablation
 mkdir -p results_v2/ablation
 
 # Generate tag for each config
@@ -19,7 +20,7 @@ for s, ts in [('low_prob',[0.3,0.5,0.7,0.9]),('t2t_remask',[0.5,0.7,0.9]),('logi
             for r in [0.25,0.50,1.0]:
                 configs.append((cid,'remask',s,str(t),c,r)); cid += 1
 c = configs[$1]
-tag = 'original' if c[1]=='original' else f'{c[2]}_t{c[3]}_c{c[4]}_r{c[5]}'
+tag = f'{c[0]:03d}_original' if c[1]=='original' else f'{c[0]:03d}_{c[2]}_t{c[3]}_c{c[4]}_r{c[5]}'
 print(tag)
 "
 }

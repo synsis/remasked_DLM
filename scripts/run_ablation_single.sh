@@ -28,12 +28,12 @@ for strategy, taus in [("low_prob", [0.3,0.5,0.7,0.9]),
 idx = int(sys.argv[1])
 c = configs[idx]
 if c[1] == "original":
-    tag = "original"
+    tag = f"{c[0]:03d}_original"
     print(f'TAG="{tag}"')
     print(f'MODE="original"')
     print(f'EXTRA_ARGS=""')
 else:
-    tag = f"{c[2]}_t{c[3]}_c{c[4]}_r{c[5]}"
+    tag = f"{c[0]:03d}_{c[2]}_t{c[3]}_c{c[4]}_r{c[5]}"
     print(f'TAG="{tag}"')
     print(f'MODE="remask"')
     print(f'EXTRA_ARGS="--strategy {c[2]} --remask_threshold {c[3]} --max_remask_per_pos {c[4]} --max_remask_ratio {c[5]}"')

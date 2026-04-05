@@ -10,15 +10,16 @@ for f in sorted(glob.glob(os.path.join(base, "*/summary.json"))):
 
 # Rebuild config list with tags
 configs = []
-configs.append(("original", "original", "", "", 3, 0.25))
+cid = 0
+configs.append((f"{cid:03d}_original", "original", "", "", 3, 0.25)); cid += 1
 for strategy, taus in [("low_prob", [0.3,0.5,0.7,0.9]),
                         ("t2t_remask", [0.5,0.7,0.9]),
                         ("logit_diff", [0.1,0.2,0.3,0.5])]:
     for tau in taus:
         for c_max in [1, 3, 5]:
             for rho in [0.25, 0.50, 1.0]:
-                tag = f"{strategy}_t{tau}_c{c_max}_r{rho}"
-                configs.append((tag, "remask", strategy, str(tau), c_max, rho))
+                tag = f"{cid:03d}_{strategy}_t{tau}_c{c_max}_r{rho}"
+                configs.append((tag, "remask", strategy, str(tau), c_max, rho)); cid += 1
 
 done = sum(1 for tag, *_ in configs if tag in summaries)
 print(f"Completed: {done}/{len(configs)}\n")
