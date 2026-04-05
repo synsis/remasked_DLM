@@ -403,47 +403,23 @@ Table~\ref{tab:main} presents the main results. \TtoM{} remasking yields the lar
 
 \subsection{Ablation Studies}
 
-\paragraph{Threshold sensitivity.}
-We study the effect of the remask threshold $\tau$ for each strategy on a 50-sample subset of GSM-Plus. Results are shown in Table~\ref{tab:ablation_threshold}.
+\paragraph{Hyperparameter ablation: cost--accuracy trade-off.}
+We conduct a full cross-ablation of all hyperparameters on CMATH. We randomly sample 100 problems from the CMATH test set (1,098 problems, fixed seed=42) and run single-sample greedy inference (batch size 1, temperature 0) on a single A100 GPU per configuration. We sweep the remask threshold $\tau$ for each strategy (\textsc{LowProb}: $\{0.1, 0.3, 0.5, 0.7, 0.9\}$; \textsc{T2T-Remask}: $\{0.5, 0.7, 0.9\}$; \textsc{LogitDiff}: $\{0.1, 0.2, 0.3, 0.5\}$), crossed with per-position budget $C_{\max} \in \{1, 3, 5\}$ and ratio cap $\rho_{\max} \in \{0.25, 0.50, 1.0\}$, plus the original T2T baseline---totaling 109 configurations. All configurations use the same 100 samples. Figure~\ref{fig:ablation} plots each configuration as a point with the $x$-axis measuring average token modifications per sample (T2T edits for the baseline, remask count for \TtoM{} strategies) and the $y$-axis measuring accuracy.
 
-\begin{table}[t]
-\centering
-\caption{Threshold sensitivity on GSM-Plus (50 samples). Accuracy for each strategy at different threshold values.}
-\label{tab:ablation_threshold}
-\vspace{4pt}
-\begin{tabular}{lcccc}
-\toprule
-\textbf{Strategy} & $\tau_1$ & $\tau_2$ & $\tau_3$ & $\tau_4$ \\
-\midrule
-Original (T2T) & \multicolumn{4}{c}{--} \\
-\midrule
-\textsc{LowProb} ($\tau$)   & 0.3: -- & 0.5: -- & 0.7: -- & 0.9: -- \\
-\textsc{T2T-Remask} ($\tau$) & 0.7: -- & 0.8: -- & 0.9: -- & 0.95: -- \\
-\textsc{LogitDiff} ($\tau$)  & 0.1: -- & 0.2: -- & 0.3: -- & 0.5: -- \\
-\bottomrule
-\end{tabular}
-\end{table}
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\textwidth]{figures/ablation_tradeoff.pdf}
+    \caption{\textbf{Token modification cost vs.\ accuracy.} Each point is one (strategy, $\tau$, $C_{\max}$, $\rho_{\max}$) configuration on CMATH (100 samples). The $x$-axis measures average token modifications per sample: T2T edits for the baseline, remasks for \TtoM{} strategies. Color shade encodes $\tau$ (lighter = smaller). The vertical dotted line marks the average output length (${\sim}333$ tokens). All \TtoM{} strategies surpass the T2T baseline (81\%, ${\star}$). \textbf{Best accuracy}: \textsc{LowProb} $\tau{=}0.7$, $C{=}3$, $\rho{=}1.0$ (95\%, 524 remasks). \textbf{Most efficient}: \textsc{LowProb} $\tau{=}0.3$, $C{=}1$, $\rho{=}0.25$ (93\%, only 69 remasks). \textbf{Cheapest} ($>$86\%): \textsc{T2T-Remask} $\tau{=}0.9$ (87\%, 2 remasks).}
+    \label{fig:ablation}
+\end{figure}
 
-\paragraph{Safety mechanism ablation.}
-We ablate the per-position budget $C_{\max}$ and ratio cap $\rho_{\max}$ on GSM-Plus (Table~\ref{tab:ablation_safety}).
-
-\begin{table}[t]
-\centering
-\caption{Effect of safety mechanisms on GSM-Plus with \textsc{LowProb} ($\tau=0.5$).}
-\label{tab:ablation_safety}
-\vspace{4pt}
-\begin{tabular}{lcc}
-\toprule
-\textbf{Configuration} & \textbf{Accuracy} & \textbf{Avg. Time (s)} \\
-\midrule
-$C_{\max}=3$, $\rho_{\max}=0.25$ (default) & -- & -- \\
-$C_{\max}=5$, $\rho_{\max}=0.25$            & -- & -- \\
-$C_{\max}=\infty$, $\rho_{\max}=0.25$       & -- & -- \\
-$C_{\max}=3$, $\rho_{\max}=0.50$            & -- & -- \\
-$C_{\max}=3$, $\rho_{\max}=1.0$             & -- & -- \\
-\bottomrule
-\end{tabular}
-\end{table}
+Several trends emerge:
+\begin{itemize}[nosep,leftmargin=*]
+    \item \textbf{All strategies improve over T2T.} Every \TtoM{} configuration exceeds the T2T baseline (81\%, 12.4 edits), confirming that remasking is strictly preferable to token replacement regardless of hyperparameter choice.
+    \item \textbf{\textsc{LowProb} dominates.} Across all cost levels, \textsc{LowProb} achieves the highest accuracy. At low cost, $\tau{=}0.3$ reaches 93\% with only 69 remasks; at higher cost, $\tau{=}0.7$ reaches 95\%.
+    \item \textbf{\textsc{T2T-Remask} is cheapest.} With $\tau{=}0.9$, it triggers only ${\sim}2$ remasks per sample (comparable to T2T's 12 edits) yet improves accuracy to 87\% (+6\%).
+    \item \textbf{Over-remasking hurts.} Large $\tau$ (e.g., 0.9 for \textsc{LowProb}) combined with large $C_{\max}$ and $\rho_{\max}$ produces $>$1000 remasks per sample, degrading accuracy below 88\%. The safety mechanisms ($C_{\max}$, $\rho_{\max}$) are essential for preventing this.
+\end{itemize}
 
 \subsection{Analysis}
 \label{sec:analysis}
