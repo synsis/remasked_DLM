@@ -40,9 +40,18 @@ def run(args):
     else:
         model, tokenizer, mask_id = load_remask_model(
             args.model_path, strategy=args.strategy,
-            remask_threshold=args.remask_threshold)
+            remask_threshold=args.remask_threshold,
+            max_remask_per_pos=getattr(args, "max_remask_per_pos", 3),
+            max_remask_ratio=getattr(args, "max_remask_ratio", 0.25))
 
-    dataset = load_dataset("Idavidrein/gpqa", "gpqa_diamond", split="train")
+    hf_token = os.environ.get("HF_TOKEN", None)
+    _old_ep = os.environ.get("HF_ENDPOINT", "")
+    _old_hub = os.environ.get("HUGGINGFACE_HUB_ENDPOINT", "")
+    os.environ["HF_ENDPOINT"] = "https://huggingface.co"
+    os.environ["HUGGINGFACE_HUB_ENDPOINT"] = "https://huggingface.co"
+    dataset = load_dataset("Idavidrein/gpqa", "gpqa_diamond", split="train", token=hf_token)
+    if _old_ep: os.environ["HF_ENDPOINT"] = _old_ep
+    if _old_hub: os.environ["HUGGINGFACE_HUB_ENDPOINT"] = _old_hub
     print(f"GPQA diamond: {len(dataset)} items")
     if args.max_samples:
         dataset = dataset.select(range(min(args.max_samples, len(dataset))))
@@ -110,5 +119,7 @@ if __name__ == "__main__":
     p.add_argument("--editing_threshold", type=float, default=0.5)
     p.add_argument("--temperature", type=float, default=0.0)
     p.add_argument("--max_samples", type=int, default=None)
+    p.add_argument("--max_remask_per_pos", type=int, default=3)
+    p.add_argument("--max_remask_ratio", type=float, default=0.25)
     add_parallel_args(p)
     run(p.parse_args())

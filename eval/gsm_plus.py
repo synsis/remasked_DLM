@@ -95,6 +95,7 @@ def run(args):
             args.model_path,
             strategy=args.strategy,
             remask_threshold=args.remask_threshold,
+            max_remask_per_pos=getattr(args, "max_remask_per_pos", 3),
             max_remask_ratio=args.max_remask_ratio,
         )
 
@@ -233,6 +234,7 @@ if __name__ == "__main__":
         default="low_prob",
     )
     p.add_argument("--remask_threshold", type=float, default=None)
+    p.add_argument("--max_remask_per_pos", type=int, default=3)
     p.add_argument("--max_remask_ratio", type=float, default=0.25,
                     help="Max fraction of editable tokens to remask per step")
     p.add_argument("--output_dir", default="results/gsm_plus")

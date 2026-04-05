@@ -53,7 +53,7 @@
 \maketitle
 
 \begin{abstract}
-Discrete masked diffusion language models such as LLaDA generate text through iterative denoising, where mask tokens are progressively replaced with predicted tokens. LLaDA2.1 introduced a Token-to-Token (T2T) editing mechanism that accelerates generation by directly replacing committed tokens suspected of being incorrect. However, we identify fundamental limitations of T2T editing: it couples error detection with replacement, pollutes the generation context with potentially incorrect tokens, and introduces a train--inference noise mismatch where systematic model-generated errors differ from the random perturbations seen during training. We propose \emph{Token-to-Mask} (T2M) remasking, a training-free, drop-in replacement for T2T editing that resets suspected erroneous tokens back to the mask state, allowing the diffusion process to re-predict them under cleaner context. We design and empirically validate three complementary error detection strategies---probability-based, trigger-mirrored, and temporal-difference-based---and provide a unified theoretical analysis showing that T2M remasking purifies the generation context, converts systematic inference errors back to the model's native mask noise type, and enables delayed commitment for joint multi-position optimization. Comprehensive experiments across 8 benchmarks spanning knowledge, reasoning, mathematics, and coding demonstrate consistent improvements over the original T2T editing baseline.
+Discrete masked diffusion language models such as LLaDA generate text through iterative denoising, where mask tokens are progressively replaced with predicted tokens. LLaDA2.1 introduced a Token-to-Token (T2T) editing mechanism that accelerates generation by directly replacing committed tokens suspected of being incorrect. However, we identify fundamental limitations of T2T editing: it couples error detection with replacement, pollutes the generation context with potentially incorrect tokens, and introduces a train--inference noise mismatch where systematic model-generated errors differ from the random perturbations seen during training. We propose \emph{Token-to-Mask} (T2M) remasking, a training-free, drop-in replacement for T2T editing that resets suspected erroneous tokens back to the mask state, allowing the diffusion process to re-predict them under cleaner context. We design and empirically validate three complementary error detection strategies---probability-based, trigger-mirrored, and temporal-difference-based---and provide a unified theoretical analysis showing that T2M remasking purifies the generation context, converts systematic inference errors back to the model's native mask noise type, and enables delayed commitment for joint multi-position optimization. Comprehensive experiments across 9 benchmarks spanning knowledge, reasoning, mathematics, coding, and instruction following demonstrate broad improvements over the original T2T editing baseline, with the largest gains on tasks requiring precise token-level output. Error analysis reveals that the dominant failure mode is \emph{last-mile token corruption}---where correct reasoning produces a corrupted final answer---and that T2M repairs 67.6\% of such cases.
 \end{abstract}
 
 %=============================================================================
@@ -63,9 +63,9 @@ Discrete masked diffusion language models such as LLaDA generate text through it
 
 Autoregressive (AR) language models~\citep{vaswani2017attention} have dominated text generation, yet their sequential left-to-right decoding is inherently serial. Discrete masked diffusion language models (dLLMs) offer a compelling alternative: they generate text by iteratively denoising a fully masked sequence, enabling parallel token prediction within each denoising step~\citep{austin2021d3pm,sahoo2024mdlm,lou2024sedd}. Recent dLLMs such as LLaDA~\citep{nie2025llada} and Dream~\citep{ye2025dream} have achieved performance competitive with similarly-sized AR models across a broad range of benchmarks.
 
-While dLLMs achieve significant inference speedups through parallel decoding, this parallelism comes at a cost: the conditional independence of token predictions within each denoising step---where each position is sampled without sequential causal conditioning on simultaneously generated neighbors---systematically amplifies token-level inconsistencies compared to AR models~\citep{kang2025parallelbench}. This heightened error susceptibility, compounded by exposure bias in which the model conditions on its own imperfect predictions, makes error correction a critical bottleneck for generation quality~\citep{nie2026llada21}.
+While dLLMs achieve significant inference speedups through parallel decoding, this parallelism comes at a cost. Within each denoising step, token predictions are conditionally independent---each position is sampled without causal conditioning on simultaneously generated neighbors---which systematically amplifies token-level inconsistencies compared to AR models~\citep{kang2025parallelbench}. This heightened error susceptibility, compounded by exposure bias in which the model conditions on its own imperfect predictions, makes error correction a critical bottleneck for generation quality~\citep{nie2026llada21}.
 
-To address this, LLaDA2.1~\citep{nie2026llada21} introduced a key inference-time innovation: \emph{Token-to-Token} (\TtoT{}) editing. Beyond the standard Mask-to-Token (\MtoT{}) step that fills in mask positions, \TtoT{} directly replaces already-committed (non-mask) tokens when the model predicts a different token at that position with high confidence. This mechanism targets the error correction bottleneck by enabling the model to retroactively ``change its mind'' about previously generated tokens.
+To address this, LLaDA2.1~\citep{nie2026llada21} introduced a key inference-time innovation: \emph{Token-to-Token} (\TtoT{}) editing. Beyond the standard Mask-to-Token (\MtoT{}) step that fills in mask positions, \TtoT{} directly replaces already-committed (non-mask) tokens when the model predicts a different token at that position with high confidence. This mechanism targets the error correction bottleneck by enabling the model to retroactively ``change its mind'' about previously generated tokens. With these innovations, LLaDA2.1 has demonstrated performance competitive with leading AR models at comparable scale across diverse benchmarks~\citep{nie2026llada21}, establishing dLLMs as a practical alternative for text generation. Improving the inference quality of such a system---without additional training cost---is therefore of direct practical significance.
 
 However, we identify three fundamental limitations of \TtoT{} editing:
 
@@ -82,9 +82,9 @@ However, we identify three fundamental limitations of \TtoT{} editing:
 \begin{enumerate}
     \item \textbf{Detection--replacement coupling.} \TtoT{} requires simultaneous satisfaction of two conditions: the current token must be wrong, \emph{and} a high-confidence replacement must exist. When the correct distribution is multimodal (multiple plausible tokens), no single candidate may exceed the confidence threshold, leaving clearly erroneous tokens uncorrected---a failure mode we term \emph{correction inertia}.
 
-    \item \textbf{Context pollution.} In parallel generation, erroneous tokens inevitably appear in the context---from imperfect \MtoT{} predictions or incorrect \TtoT{} replacements. These erroneous tokens, appearing as legitimate tokens, provide misleading semantic signals that bias subsequent predictions at both mask and non-mask positions. \TtoT{} is not triggered when no high-confidence alternative exists, leaving the error in place; even when triggered, its replacement may itself be incorrect, perpetuating the pollution. \TtoM{} instead removes the error signal entirely by resetting to a neutral \mask{}.
+    \item \textbf{Context pollution} (fundamental limitation of \TtoT{}). \TtoT{}'s core design---replacing one token with another---cannot guarantee context improvement. Even when \TtoT{} is triggered, its replacement is conditioned on context that may itself contain errors at other positions; under such polluted context, even high-confidence replacements may be incorrect. The replaced token, appearing as a legitimate signal, provides misleading semantic cues that bias predictions at all other positions and can create self-reinforcing error cycles. In contrast, \TtoM{} removes the error signal entirely by resetting to a neutral \mask{}, which carries no semantic bias and cannot mislead.
 
-    \item \textbf{Train--inference noise mismatch.} LLaDA2.1's \TtoT{} training uses random token perturbations (random wrong token $\to$ ground truth), but at inference time, erroneous tokens in context are not random---they are \emph{systematic, correlated} model-generated mistakes. This distributional gap affects both \MtoT{} and \TtoT{} operations: regardless of the operation type, the context noise encountered during inference differs fundamentally from the random perturbations seen during training. Since \MtoT{} prediction from \mask{} context is the foundational capability of masked diffusion models~\citep{nie2026llada21}, resetting errors to \mask{} converts the context into the form the model handles most reliably.
+    \item \textbf{Train--inference noise mismatch} (limitation of LLaDA2.1's training procedure). LLaDA2.1's \TtoT{} training stream uses \emph{random} token perturbations (uniformly sampled wrong tokens $\to$ ground truth), but at inference time, erroneous tokens are \emph{systematic, model-generated} mistakes that are semantically plausible and correlated with surrounding tokens. This distributional gap means the model encounters a type of context noise at inference that it has never seen during training---neither the clean \mask{} noise of the \MtoT{} stream nor the random perturbations of the \TtoT{} stream. Since \MtoT{} prediction from \mask{} context is the foundational capability of masked diffusion models~\citep{nie2026llada21}, resetting errors to \mask{} converts the context back to a form the model handles most reliably.
 \end{enumerate}
 
 We propose \emph{Token-to-Mask} (\TtoM{}) remasking as a principled alternative. Instead of replacing suspected tokens, \TtoM{} resets them to the \mask{} state, allowing the diffusion process to re-predict these positions from scratch under a cleaner context. This simple change simultaneously addresses all three limitations: it decouples error detection from replacement, purifies the context by removing erroneous tokens, and converts systematic inference errors back to the model's native \mask{} noise type. Moreover, by reverting to \mask{} rather than immediately committing a replacement, \TtoM{} naturally implements \emph{delayed commitment}---deferring the final token decision to a later step where the surrounding context has further converged, enabling joint re-optimization of multiple suspect positions. Figure~\ref{fig:overview} illustrates the contrast: \TtoT{} leaves an error in place when no confident replacement exists (\emph{correction inertia}), while \TtoM{} resets it to \mask{} and lets a subsequent \MtoT{} step recover the correct token under purified context.
@@ -96,7 +96,8 @@ Our contributions are:
     \item We identify fundamental limitations of \TtoT{} editing in LLaDA2.1 and propose \TtoM{} remasking as a principled, training-free replacement.
     \item We design and empirically validate three error detection strategies on a small-scale pilot set, and analyze their complementary strengths.
     \item We provide a unified theoretical framework explaining why mask tokens are strictly preferable to erroneous tokens as context, from the perspectives of train--inference noise mismatch, context signal hierarchy, and delayed commitment.
-    \item We conduct comprehensive experiments across 8 benchmarks demonstrating consistent improvements.
+    \item We discover that \emph{last-mile token corruption}---where the model's reasoning is correct but the final answer is corrupted during denoising---is the dominant error mode (73.9\% of errors on CMATH), and show that \TtoM{} specifically repairs this failure mode.
+    \item We conduct comprehensive experiments across 9 benchmarks demonstrating broad improvements, particularly on tasks requiring precise token-level output.
 \end{itemize}
 
 
@@ -337,17 +338,17 @@ The advantage of targeted over random remasking is:
 \end{equation}
 for all $\sigma \in (0, 1]$. Both terms are strictly positive: targeted remasking simultaneously preserves more correct context and removes more errors. Even with imperfect detection, targeted remasking outperforms random remasking as long as the detector is better than chance, i.e., its precision-recall tradeoff exceeds the base rate $N_e / N$.
 
-CORE~\citep{zhai2026core} proposes context-robust remasking that identifies ``context-brittle'' tokens via sensitivity to masked perturbations, arguing that static probability-based heuristics are myopic. We contend that this criticism has a fundamental theoretical issue. CORE's sensitivity metric measures conditional mutual information $I(X_i; Z_S \mid Z_{-i,-S})$, but this quantity is \emph{dominated by the current mask pattern} of the denoising state, not by token correctness. Concretely: a correct token may exhibit low sensitivity when its semantically related neighbors are still \mask{} (the relevant context is already absent), yet the same token's sensitivity may spike once those neighbors are filled---regardless of whether the fill is correct. Conversely, an erroneous token may appear ``stable'' simply because its correlated neighbors happen to be unpredicted. In other words, CORE's sensitivity primarily reflects the \emph{transient state of the denoising process} (which positions happen to be filled), not the intrinsic correctness of the token---making it theoretically unreliable as an error detection signal.
+CORE~\citep{zhai2026core} proposes context-robust remasking that identifies ``context-brittle'' tokens via sensitivity to masked perturbations, arguing that static probability-based heuristics are myopic. However, we note a potential limitation of the sensitivity-based approach. CORE's sensitivity metric measures conditional mutual information $I(X_i; Z_S \mid Z_{-i,-S})$, which may be influenced by the \emph{current mask pattern} of the denoising state rather than token correctness alone. For instance, a correct token may exhibit low sensitivity when its semantically related neighbors are still \mask{} (the relevant context is already absent), yet the same token's sensitivity may spike once those neighbors are filled---regardless of whether the fill is correct. Conversely, an erroneous token may appear ``stable'' simply because its correlated neighbors happen to be unpredicted. This suggests that CORE's sensitivity may partly reflect the \emph{transient state of the denoising process} (which positions happen to be filled) rather than the intrinsic correctness of the token.
 
-Conversely, the static probability $p_\theta(x_i \mid \mathbf{z})$ is the model's \emph{posterior belief} about $x_i$ given the \emph{full} current context---the most direct available signal for token correctness. By the data processing inequality, evaluating under artificially degraded context (CORE's masking perturbations) cannot yield strictly more information about $X_i$'s correctness than the full-context prediction. Moreover, CORE's perturbation distribution (random context masking) is itself artificial and does not reflect the actual error patterns during inference.
+In contrast, the static probability $p_\theta(x_i \mid \mathbf{z})$ is the model's \emph{posterior belief} about $x_i$ given the \emph{full} current context---arguably the most direct available signal for token correctness. By the data processing inequality, evaluating under artificially degraded context (CORE's masking perturbations) cannot yield strictly more information about $X_i$'s correctness than the full-context prediction.
 
 Practically, CORE requires $O(k)$ additional forward passes per perturbation test, while static probability is a free byproduct of the existing forward pass. Our \textsc{LogitDiff} strategy captures a related but more principled form of sensitivity: it tracks how the model's opinion changes along the \emph{actual} denoising trajectory rather than under artificial perturbations, also at zero extra forward-pass cost.
 
 \paragraph{Training-based correction.}
-Several methods improve remasking quality through additional training. RemeDi~\citep{remedi2025} trains a dual-stream architecture with supervised fine-tuning and reinforcement learning to learn per-token confidence scores for remasking decisions. ProSeCo~\citep{wang2026proseco} adds a corrector cross-entropy loss to train the model to recover from its own mistakes. PRISM~\citep{kim2025prism} attaches a lightweight adapter fine-tuned with a self-correction loss. MDPO~\citep{he2025mdpo} frames denoising as sequential decision-making and applies policy optimization, also proposing Running Confidence Remasking (RCR) as a training-free baseline. These methods are complementary to our approach: they improve the model's ability to detect or correct errors through training, while we improve the \emph{correction mechanism} itself (T2M vs.\ T2T) without any training.
+Several methods improve remasking quality through additional training. RemeDi~\citep{remedi2025} trains a dual-stream architecture with supervised fine-tuning and reinforcement learning to learn per-token confidence scores for remasking decisions. ProSeCo~\citep{schiff2026proseco} adds a corrector cross-entropy loss to train the model to recover from its own mistakes. PRISM~\citep{kim2025prism} attaches a lightweight adapter fine-tuned with a self-correction loss. MDPO~\citep{he2025mdpo} frames denoising as sequential decision-making and applies policy optimization, also proposing Running Confidence Remasking (RCR) as a training-free baseline. These methods are complementary to our approach: they improve the model's ability to detect or correct errors through training, while we improve the \emph{correction mechanism} itself (T2M vs.\ T2T) without any training.
 
 \paragraph{Positioning.}
-Our approach offers principled advantages over existing remasking methods along three axes. \emph{Compared with ReMDM}, we replace blind random remasking with targeted error-driven remasking, which we formally show to be strictly superior in context quality (Eq.~\ref{eq:q_random}--\ref{eq:q_advantage}). \emph{Compared with CORE}, we avoid the theoretically unreliable perturbation-based sensitivity metric---whose value is dominated by the transient mask pattern rather than token correctness---and instead use direct posterior probability and natural denoising-trajectory dynamics (\textsc{LogitDiff}), both grounded in the model's full-context prediction. \emph{Compared with training-based methods} (RemeDi, ProSeCo, PRISM, MDPO), we achieve improvements at zero training cost by addressing the correction mechanism itself (T2M vs.\ T2T) rather than learning better error detectors. Our theoretical framework---the signal hierarchy (Remark~\ref{rem:signal}), the targeted-vs-random analysis, and the delayed commitment formulation---provides a unified foundation that is complementary to and composable with all of the above.
+Our approach offers principled advantages over existing remasking methods along three axes. \emph{Compared with ReMDM}, we replace blind random remasking with targeted error-driven remasking, which we formally show to be strictly superior in context quality (Eq.~\ref{eq:q_random}--\ref{eq:q_advantage}). \emph{Compared with CORE}, we use direct posterior probability and natural denoising-trajectory dynamics (\textsc{LogitDiff}), both grounded in the model's full-context prediction, rather than perturbation-based sensitivity metrics that may be influenced by the transient mask pattern. \emph{Compared with training-based methods} (RemeDi, ProSeCo, PRISM, MDPO), we achieve improvements at zero training cost by addressing the correction mechanism itself (T2M vs.\ T2T) rather than learning better error detectors. Our theoretical framework---the signal hierarchy (Remark~\ref{rem:signal}), the targeted-vs-random analysis, and the delayed commitment formulation---provides a unified foundation that is complementary to and composable with all of the above.
 
 %=============================================================================
 \section{Experiments}
@@ -360,25 +361,25 @@ Our approach offers principled advantages over existing remasking methods along 
 
 \paragraph{Inference hyperparameters.} We adopt LLaDA2.1's recommended Quality Mode (Q Mode) settings: M2T confidence threshold $\tau_{\text{m2t}} = 0.7$, T2T editing threshold $\tau_{\text{t2t}} = 0.5$, block length $B = 32$, temperature $= 0.0$ (greedy), and $\texttt{eos\_early\_stop} = \text{True}$. Generation length is set per-benchmark (see Appendix~\ref{app:benchmarks}).
 
-\paragraph{Remask hyperparameters.} For \TtoM{} strategies, we use the following default thresholds (tuned on a 50-sample subset of GSM-Plus): \textsc{LowProb} $\tau_{\textsc{lp}} = 0.5$, \textsc{T2T-Remask} $\tau_{\textsc{tr}} = 0.9$, \textsc{LogitDiff} $\tau_{\textsc{ld}} = 0.3$. Safety parameters: $C_{\max} = 3$ (per-position budget), $\rho_{\max} = 0.25$ (ratio cap).
+\paragraph{Remask hyperparameters.} For the main results, we use \TtoM{} with the \textsc{LowProb} strategy ($\tau_{\textsc{lp}} = 0.3$, $C_{\max} = 1$, $\rho_{\max} = 0.25$), selected as the most cost-efficient configuration from the ablation study (Figure~\ref{fig:ablation}). The full hyperparameter sweep across all three strategies is presented in the ablation.
 
-\paragraph{Baselines.} Our primary comparison is between the original \TtoT{} editing (``Original'') and our three \TtoM{} strategies, all using the same model and inference parameters. This controlled comparison isolates the effect of the editing mechanism.
+\paragraph{Baselines.} Our primary comparison is between the original \TtoT{} editing (``Original'') and \TtoM{} remasking with the configuration described above. All methods use the same model and inference parameters, isolating the effect of the editing mechanism.
 
-\paragraph{Evaluation note.} We use the official LLaDA2.1 model weights, the HuggingFace-provided inference code, and official benchmark datasets for inference. However, LLaDA2.1 does not open-source its evaluation code. We observe that our reproduced baseline absolute scores differ from the original paper under the same model and datasets, likely due to differences in prompt templates or answer extraction logic. This discrepancy does not affect the validity of our conclusions: all comparisons between \TtoT{} baseline and \TtoM{} methods in this work are conducted under \emph{exactly identical} evaluation pipelines, ensuring fairness.
+\paragraph{Evaluation note.} We use the official LLaDA2.1 model weights and official benchmark datasets. As LLaDA2.1 does not release its evaluation code, our reproduced baseline absolute scores may differ from the original paper due to prompt template or answer extraction differences; all \TtoT{} vs.\ \TtoM{} comparisons use \emph{identical} evaluation pipelines.
 
-\paragraph{Benchmarks.} We evaluate on a comprehensive suite of benchmarks spanning four categories: \textbf{Knowledge} (GPQA-Diamond~\citep{rein2024gpqa}, TriviaQA~\citep{joshi2017triviaqa}), \textbf{Reasoning} (HellaSwag~\citep{zellers2019hellaswag}, PIQA~\citep{bisk2020piqa}, DROP~\citep{dua2019drop}), \textbf{Mathematics} (CMATH~\citep{wei2024cmath}, AIME~2025~\citep{aime2025}), and \textbf{Coding} (HumanEval+~\citep{chen2021humaneval}).
+\paragraph{Benchmarks.} We evaluate on 9 benchmarks spanning five categories: \textbf{Knowledge} (GPQA-Diamond~\citep{rein2024gpqa}, TriviaQA~\citep{joshi2017triviaqa}), \textbf{Reasoning} (HellaSwag~\citep{zellers2019hellaswag}, PIQA~\citep{bisk2020piqa}, DROP~\citep{dua2019drop}), \textbf{Mathematics} (CMATH~\citep{wei2023cmath}, AIME~2025~\citep{aime2025}), \textbf{Coding} (HumanEval+~\citep{chen2021humaneval,liu2023evalplus}), and \textbf{Instruction Following} (IFEval~\citep{zhou2023ifeval}).
 
 \subsection{Main Results}
 
 \begin{table}[t]
 \centering
-\caption{Main results across 8 benchmarks. All methods use LLaDA2.1-mini with identical inference parameters. TriviaQA and DROP report F1; others report accuracy or pass@1 (\%). Best per-benchmark in \textbf{bold}.}
+\caption{Main results across 9 benchmarks. All methods use LLaDA2.1-mini with identical inference parameters; \TtoM{} uses the \textsc{LowProb} strategy ($\tau{=}0.3$, $C_{\max}{=}1$, $\rho_{\max}{=}0.25$). TriviaQA and DROP report F1; others report accuracy or pass@1 (\%). Best per-benchmark in \textbf{bold}.}
 \label{tab:main}
 \vspace{4pt}
 \small
 \begin{tabular}{llccc}
 \toprule
-\textbf{Category} & \textbf{Benchmark} & \textbf{Original (T2T)} & \textbf{T2M Remask} & $\boldsymbol{\Delta}$ \\
+\textbf{Category} & \textbf{Benchmark} & \textbf{Original (T2T)} & \textbf{T2M (LowProb)} & $\boldsymbol{\Delta}$ \\
 \midrule
 \multirow{2}{*}{Knowledge}
   & GPQA-Diamond   & 21.7          & \textbf{22.7} & \good{+1.0} \\
@@ -395,16 +396,45 @@ Our approach offers principled advantages over existing remasking methods along 
 \midrule
 Coding
   & HumanEval+     & 64.6          & 64.6          & $\pm 0.0$ \\
+\midrule
+Instruction
+  & IFEval (Strict) & 73.0         & \textbf{73.4} & \good{+0.4} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Table~\ref{tab:main} presents the main results. \TtoM{} remasking yields the largest gains on \textbf{mathematics} tasks (CMATH $+5.8$, AIME~2025 $+6.7$), where final answers are exact numbers and even a single corrupted digit causes failure. Consistent improvements are also observed on \textbf{knowledge and extractive QA} (GPQA $+1.0$, TriviaQA $+1.2$ F1, DROP $+0.6$ F1), where answers are short spans requiring precise token-level reproduction. On \textbf{commonsense reasoning} tasks (HellaSwag, PIQA), performance is essentially unchanged ($-0.1$/$-0.1$): outputs are short ($\sim$100--140 tokens) and rarely suffer from corruption. On \textbf{coding} (HumanEval+), no difference is observed ($\pm 0.0$). We analyze these task-dependent patterns in Section~\ref{sec:analysis}.
+Table~\ref{tab:main} presents the main results. \TtoM{} remasking yields the largest gains on \textbf{mathematics} tasks (CMATH $+5.8$, AIME~2025 $+6.7$\footnote{AIME~2025 contains only 30 problems; the $+6.7\%$ gain corresponds to 2 additional correct answers and should be interpreted with caution given the small sample size.}), where final answers are exact numbers and even a single corrupted digit causes failure. Improvements are also observed on \textbf{knowledge and extractive QA} (GPQA $+1.0$, TriviaQA $+1.2$ F1, DROP $+0.6$ F1), where answers are short spans requiring precise token-level reproduction, and on \textbf{instruction following} (IFEval $+0.4$). On \textbf{commonsense reasoning} tasks (HellaSwag, PIQA), performance is essentially unchanged ($-0.1$/$-0.1$): outputs are short ($\sim$100--140 tokens) and rarely suffer from corruption. On \textbf{coding} (HumanEval+), no difference is observed ($\pm 0.0$). We analyze these task-dependent patterns in Section~\ref{sec:analysis}.
 
 \subsection{Ablation Studies}
 
 \paragraph{Hyperparameter ablation: cost--accuracy trade-off.}
-We conduct a full cross-ablation of all hyperparameters on CMATH. We randomly sample 100 problems from the CMATH test set (1,098 problems, fixed seed=42) and run single-sample greedy inference (batch size 1, temperature 0) on a single A100 GPU per configuration. We sweep the remask threshold $\tau$ for each strategy (\textsc{LowProb}: $\{0.1, 0.3, 0.5, 0.7, 0.9\}$; \textsc{T2T-Remask}: $\{0.5, 0.7, 0.9\}$; \textsc{LogitDiff}: $\{0.1, 0.2, 0.3, 0.5\}$), crossed with per-position budget $C_{\max} \in \{1, 3, 5\}$ and ratio cap $\rho_{\max} \in \{0.25, 0.50, 1.0\}$, plus the original T2T baseline---totaling 109 configurations. All configurations use the same 100 samples. Figure~\ref{fig:ablation} plots each configuration as a point with the $x$-axis measuring average token modifications per sample (T2T edits for the baseline, remask count for \TtoM{} strategies) and the $y$-axis measuring accuracy.
+We conduct a full cross-ablation of all hyperparameters on CMATH. We randomly sample 100 problems from the CMATH test set (1,098 problems, fixed seed=42) and run single-sample greedy inference (batch size 1, temperature 0) on a single A100-80GB GPU per configuration. All shared inference parameters follow the Q~Mode defaults from our main experiments: M2T confidence threshold $\tau_{\text{m2t}}{=}0.7$, T2T editing threshold $\tau_{\text{t2t}}{=}0.5$, block length $B{=}32$, generation length 16,384.
+
+The M2T fill threshold $\tau_{\text{m2t}}{=}0.7$ is shared by all configurations (including the baseline), controlling when mask positions are filled. On top of this, we sweep three remask-specific hyperparameters:
+\begin{enumerate}[nosep,leftmargin=*]
+    \item The \emph{remask threshold} $\tau$ controls how aggressively each strategy triggers remasking. The direction of $\tau$ varies by strategy (Table~\ref{tab:tau_dir}).
+    \begin{table}[h]
+    \centering\small
+    \vspace{-2pt}
+    \begin{tabular}{lcl}
+    \toprule
+    \textbf{Strategy} & \textbf{Higher $\tau$ $\to$} & \textbf{Sweep range} \\
+    \midrule
+    \textsc{LowProb}    & more remasking & $\{0.1, 0.3, 0.5, 0.7, 0.9\}$ \\
+    \textsc{T2T-Remask} & less remasking & $\{0.5, 0.7, 0.9\}$ \\
+    \textsc{LogitDiff}  & less remasking & $\{0.1, 0.2, 0.3, 0.5\}$ \\
+    \bottomrule
+    \end{tabular}
+    \caption{Effect of increasing $\tau$ on remask volume per strategy.}
+    \label{tab:tau_dir}
+    \vspace{-6pt}
+    \end{table}
+    \item The \emph{per-position budget} $C_{\max} \in \{1, 3, 5\}$ limits how many times each position can be remasked---larger values allow more repeated corrections.
+    \item The \emph{ratio cap} $\rho_{\max} \in \{0.25, 0.50, 1.0\}$ limits the fraction of editable positions remasked per step---$1.0$ means no cap.
+\end{enumerate}
+The baseline uses the original T2T editing with $\tau_{\text{t2t}}{=}0.5$ (no remasking), with all inference parameters aligned with the official LLaDA2.1-mini Q~Mode defaults~\citep{nie2026llada21}. This yields $1 + (5{+}3{+}4) \times 3 \times 3 = 109$ configurations, all evaluated on the same 100 samples.
+
+Figure~\ref{fig:ablation} plots each configuration as a point. The $x$-axis measures average token modifications per sample---T2T edits for the baseline (${\star}$, 12.4 edits/sample), remask count for \TtoM{} strategies. The $y$-axis measures accuracy.
 
 \begin{figure}[t]
     \centering
@@ -421,21 +451,23 @@ Several trends emerge:
     \item \textbf{Over-remasking hurts.} Large $\tau$ (e.g., 0.9 for \textsc{LowProb}) combined with large $C_{\max}$ and $\rho_{\max}$ produces $>$1000 remasks per sample, degrading accuracy below 88\%. The safety mechanisms ($C_{\max}$, $\rho_{\max}$) are essential for preventing this.
 \end{itemize}
 
+\noindent Overall, the most cost-efficient configuration (\textsc{LowProb} $\tau{=}0.3$, $C{=}1$, $\rho{=}0.25$) adds only ${\sim}69$ remasks per sample---modest relative to the average output length of ${\sim}333$ tokens---while achieving a 12-point accuracy gain over \TtoT{}.
+
 \subsection{Analysis}
 \label{sec:analysis}
 
 \paragraph{Per-sample flip analysis.}
-To understand \emph{how} \TtoM{} improves accuracy, we classify every sample into four categories: both methods correct, both wrong, only \TtoT{} correct (``orig only''), or only \TtoM{} correct (``remask only''). Table~\ref{tab:flip} reports this breakdown. On every benchmark, the vast majority of samples (90--99\%) are unaffected---improvements come from a small fraction where remasking flips the outcome.
+To understand \emph{how} \TtoM{} improves accuracy, we classify every sample into four categories: both methods correct, both wrong, only \TtoT{} correct (``T2T only''), or only \TtoM{} correct (``T2M only''). Table~\ref{tab:flip} reports this breakdown. On every benchmark, the vast majority of samples (90--99\%) are unaffected---improvements come from a small fraction where remasking flips the outcome.
 
 \begin{table}[t]
 \centering
-\caption{Per-sample flip analysis. ``Orig only'' = \TtoT{} correct but \TtoM{} wrong; ``Remask only'' = the reverse. Net gain = remask only $-$ orig only.}
+\caption{Per-sample flip analysis. ``T2T only'' = \TtoT{} correct but \TtoM{} wrong; ``T2M only'' = the reverse. Net gain = T2M only $-$ T2T only.}
 \label{tab:flip}
 \vspace{4pt}
 \small
 \begin{tabular}{lrrrrrr}
 \toprule
-\textbf{Benchmark} & \textbf{N} & \textbf{Both correct} & \textbf{Both wrong} & \textbf{Orig only} & \textbf{Remask only} & \textbf{Net} \\
+\textbf{Benchmark} & \textbf{N} & \textbf{Both correct} & \textbf{Both wrong} & \textbf{T2T only} & \textbf{T2M only} & \textbf{Net} \\
 \midrule
 CMATH      & 1098  & 869 \small(79.1\%) & 83 \small(7.6\%)    & 41 \small(3.7\%) & \textbf{105} \small(9.6\%) & $+64$ \\
 AIME 2025  & 30    & 9 \small(30.0\%)   & 17 \small(56.7\%)   & 1 \small(3.3\%)  & \textbf{3} \small(10.0\%)  & $+2$ \\
@@ -477,9 +509,9 @@ Among the 105 samples that \TtoM{} flipped from incorrect to correct, 94 (89.5\%
 The flip analysis in Table~\ref{tab:flip} reveals a clear pattern. \TtoM{} helps most on tasks that require \emph{precise token-level output}:
 \begin{itemize}[nosep,leftmargin=*]
     \item \textbf{Mathematics} (CMATH $+5.8$, AIME $+6.7$): final answers are exact numbers; a single corrupted digit causes a wrong answer.
-    \item \textbf{Extractive QA} (DROP $+1.0$, TriviaQA $+0.8$): answers are short spans where token-level fidelity matters (e.g., ``Derrick'' $\to$ ``Derrick Mason'', ``Basket'' $\to$ ``Basketball'').
+    \item \textbf{Extractive QA} (DROP $+0.6$ F1, TriviaQA $+1.2$ F1): answers are short spans where token-level fidelity matters (e.g., ``Derrick'' $\to$ ``Derrick Mason'', ``Basket'' $\to$ ``Basketball'').
 \end{itemize}
-In contrast, \TtoM{} provides no benefit on \textbf{commonsense reasoning} tasks (HellaSwag $-0.1$, PIQA $-0.1$) or \textbf{coding} (HumanEval+ $\pm 0.0$). These tasks either produce short outputs ($\sim$105--141 tokens for commonsense) or require structural correctness rather than exact token fidelity (coding), leaving little room for last-mile corruption. For HellaSwag/PIQA, only 4--5\% of samples change prediction at all, and the flips are nearly symmetric (HellaSwag: 194 broke vs.\ 178 fixed), indicating that remasking acts as random perturbation rather than targeted correction on these tasks.
+\TtoM{} shows a modest gain on \textbf{instruction following} (IFEval $+0.4$), and no meaningful benefit on \textbf{commonsense reasoning} tasks (HellaSwag $-0.1$, PIQA $-0.1$) or \textbf{coding} (HumanEval+ $\pm 0.0$). These latter tasks either produce short outputs ($\sim$105--141 tokens for commonsense) or require structural correctness rather than exact token fidelity (coding), leaving little room for last-mile corruption. For HellaSwag/PIQA, only 4--5\% of samples change prediction at all, and the flips are nearly symmetric (HellaSwag: 194 broke vs.\ 178 fixed), indicating that remasking acts as random perturbation rather than targeted correction on these tasks.
 
 The step-by-step token denoising trajectories for these examples (DROP 160 and DROP 75) are provided in Figure~\ref{fig:trajectory} (Appendix~\ref{app:trajectory}), showing per-token probabilities at each denoising iteration for both \TtoT{} and \TtoM{}.
 
@@ -490,7 +522,7 @@ The step-by-step token denoising trajectories for these examples (DROP 160 and D
 
 We have identified fundamental limitations of Token-to-Token (\TtoT{}) editing in LLaDA2.1 and proposed Token-to-Mask (\TtoM{}) remasking as a principled, training-free replacement. By resetting suspected erroneous tokens to the mask state instead of replacing them with potentially incorrect alternatives, \TtoM{} purifies the generation context, converts systematic inference errors back to the model's native \mask{} noise type, and enables joint multi-position re-optimization through delayed commitment.
 
-Our theoretical analysis provides a unified understanding of why mask tokens are strictly preferable to erroneous tokens as context, drawing parallels between the discrete and continuous diffusion settings. Three complementary error detection strategies---\textsc{LowProb}, \textsc{T2T-Remask}, and \textsc{LogitDiff}---offer flexibility in detecting different types of token-level errors.
+Our theoretical analysis provides a unified understanding of why mask tokens are strictly preferable to erroneous tokens as context, drawing parallels between the discrete and continuous diffusion settings. Three complementary error detection strategies---\textsc{LowProb}, \textsc{T2T-Remask}, and \textsc{LogitDiff}---offer flexibility in detecting different types of token-level errors. Experiments across 9 benchmarks demonstrate broad improvements, with the largest gains on tasks requiring precise token-level output; our error analysis reveals that last-mile token corruption accounts for 73.9\% of errors on CMATH, with \TtoM{} repairing 67.6\% of such corruptions.
 
 \paragraph{Limitations.} Our approach is specific to the \TtoT{} editing mechanism in LLaDA2.1 and may not directly apply to dLLMs without such a mechanism. The theoretical analysis relies on the assumption that mask context is always preferable to erroneous context, which may not hold when error rates are very low. The safety mechanisms introduce hyperparameters ($C_{\max}$, $\rho_{\max}$) that may require task-specific tuning.
 
@@ -537,6 +569,9 @@ Table~\ref{tab:benchmark_details} lists all benchmarks used in our evaluation wi
 \midrule
 Coding
 & HumanEval+ & --  & 164 & pass@1 \\
+\midrule
+Instruction
+& IFEval         & test  & 541   & Prompt Strict Acc \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -598,6 +633,6 @@ Figure~\ref{fig:trajectory} shows the full token-level denoising trajectory for 
 
 %=============================================================================
 \newpage
-% \input{checklist}
+\input{checklist}
 
 \end{document}

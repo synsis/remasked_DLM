@@ -105,7 +105,9 @@ def run(args):
     else:
         model, tokenizer, mask_id = load_remask_model(
             args.model_path, strategy=args.strategy,
-            remask_threshold=args.remask_threshold)
+            remask_threshold=args.remask_threshold,
+            max_remask_per_pos=getattr(args, "max_remask_per_pos", 3),
+            max_remask_ratio=getattr(args, "max_remask_ratio", 0.25))
 
     dataset = load_drop_split()
     print(f"DROP: {len(dataset)} examples")
@@ -198,5 +200,7 @@ if __name__ == "__main__":
     p.add_argument("--editing_threshold", type=float, default=0.5)
     p.add_argument("--temperature", type=float, default=0.0)
     p.add_argument("--max_samples", type=int, default=None)
+    p.add_argument("--max_remask_per_pos", type=int, default=3)
+    p.add_argument("--max_remask_ratio", type=float, default=0.25)
     add_parallel_args(p)
     run(p.parse_args())
