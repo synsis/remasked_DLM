@@ -109,7 +109,7 @@ def aggregate_gen_stats(results):
 
 
 def add_parallel_args(parser):
-    """Add --batch_size, --shard_id, --num_shards to an argparse parser."""
+    """Add --batch_size, --shard_id, --num_shards, --max_seq_length to an argparse parser."""
     parser.add_argument(
         "--batch_size", type=int, default=1,
         help="Number of prompts per forward pass (batched generation)")
@@ -119,6 +119,9 @@ def add_parallel_args(parser):
     parser.add_argument(
         "--num_shards", type=int, default=1,
         help="Total number of dataset shards")
+    parser.add_argument(
+        "--max_seq_length", type=int, default=None,
+        help="Max total seq length (prompt+gen). Overrides gen_length dynamically per batch.")
     return parser
 
 
@@ -223,10 +226,21 @@ def run_eval(
     return results, acc
 
 
-def _process_one(model, tokenizer, ex, gkw, format_prompt_fn, evaluate_fn, make_result_fn):
+def _cap_gen_length(gkw, prompt_len, args):
+    """If max_seq_length is set, cap gen_length so total doesn't exceed it."""
+    max_seq = getattr(args, "max_seq_length", None)
+    if max_seq and max_seq > prompt_len:
+        capped = max(1, max_seq - prompt_len)
+        if capped < gkw.get("gen_length", 0):
+            return {**gkw, "gen_length": capped}
+    return gkw
+
+
+def _process_one(model, tokenizer, ex, gkw, format_prompt_fn, evaluate_fn, make_result_fn, args=None):
     prompt_text = format_prompt_fn(ex, tokenizer)
     ids = tokenize_prompt(prompt_text, tokenizer, model.device)
-    out = model.generate(inputs=ids, **gkw)
+    this_gkw = _cap_gen_length(gkw, ids.shape[1], args) if args else gkw
+    out = model.generate(inputs=ids, **this_gkw)
     resp = tokenizer.decode(out[0], skip_special_tokens=True)
     ev = evaluate_fn(resp, ex)
     if make_result_fn:
@@ -243,7 +257,7 @@ def _run_sequential(model, tokenizer, examples, gkw, results,
     correct = total = 0
     for i, ex in enumerate(tqdm(examples, desc=f"{benchmark} [{tag}]")):
         r = _process_one(model, tokenizer, ex, gkw,
-                         format_prompt_fn, evaluate_fn, make_result_fn)
+                         format_prompt_fn, evaluate_fn, make_result_fn, args=args)
         correct += r.get("correct", False)
         total += 1
         results.append(r)
@@ -268,7 +282,11 @@ def _run_batched(model, tokenizer, examples, batch_size, gkw, results,
             prompt_text = format_prompt_fn(ex, tokenizer)
             prompts_ids.append(tokenize_prompt(prompt_text, tokenizer, model.device))
 
-        outputs = model.generate_batch(inputs_list=prompts_ids, **gkw)
+        max_prompt_len = max(p.shape[1] for p in prompts_ids)
+        batch_gkw = _cap_gen_length(gkw, max_prompt_len, args)
+        total_seq = max_prompt_len + batch_gkw.get("gen_length", 0)
+        print(f"  batch {start//batch_size}: prompt={max_prompt_len} gen={batch_gkw.get('gen_length',0)} total_seq={total_seq} bs={len(prompts_ids)}", flush=True)
+        outputs = model.generate_batch(inputs_list=prompts_ids, **batch_gkw)
         batch_stats = get_gen_stats(model)
 
         for out, ex in zip(outputs, batch_ex):

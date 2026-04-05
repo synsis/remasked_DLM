@@ -1,26 +1,28 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════
-#  通用多卡 shard 并行 eval 脚本 (v2: 支持选择 mode, OOM 自动重试)
+#  通用多卡 shard 并行 eval 脚本
+#  所有参数均为 --key value 形式, 顺序随意
+#
 #  用法:
-#    bash run_eval_8gpu2.sh <dataset> [bsz] [ngpu] [original|remask|all] [gen_length]
+#    bash run_eval_8gpu.sh --dataset <name> [--bsz N] [--ngpu N]
+#                          [--mode original|remask|all]
+#                          [--gen_length N]
 #
 #  例子:
-#    bash run_eval_8gpu2.sh hellaswag                       # bsz=16, 全部GPU, all
-#    bash run_eval_8gpu2.sh drop 32 8 all                   # bsz=32, 8卡, 两个都跑
-#    bash run_eval_8gpu2.sh bbh 16 8 remask                 # bsz=16, 8卡, 只跑remask
-#    bash run_eval_8gpu2.sh mmlu_pro 16 4 original          # bsz=16, 4卡, 只跑original
-#    bash run_eval_8gpu2.sh humaneval 1 4 remask            # 代码任务, 只跑remask
-#    bash run_eval_8gpu2.sh bbh 128 8 remask 8192           # 指定 gen_length=8192
+#    bash run_eval_8gpu.sh --dataset hellaswag
+#    bash run_eval_8gpu.sh --dataset drop --bsz 32 --ngpu 8 --mode all
+#    bash run_eval_8gpu.sh --dataset bbh --bsz 16 --ngpu 8 --mode remask
+#    bash run_eval_8gpu.sh --dataset mmlu_pro --bsz 16 --ngpu 4 --mode original
+#    bash run_eval_8gpu.sh --dataset bbh --bsz 8 --mode remask --gen_length 4096
+#    bash run_eval_8gpu.sh --ngpu 4 --dataset gpqa --mode all --bsz 2
+#
+#  --gen_length : 生成(回答)的 token 上限, 传给 python 的 --gen_length
+#                 不设则用各 eval 脚本的默认值(通常 16384)
 #
 #  OOM 自动重试: shard OOM 后自动减半 bsz 重跑, 直到成功或 bsz<1
 #
 #  支持的 dataset: cmath, gsm_plus, piqa, hellaswag, triviaqa, drop, bbh,
 #    aime2025, humaneval, mbpp, mmlu_pro, gpqa, ifeval, bfcl
-#  跑完后 results_v2/<dataset>/ 下会有:
-#    original_results.jsonl          汇总结果
-#    original_summary.json           汇总 summary
-#    remask_low_prob_None_results.jsonl
-#    remask_low_prob_None_summary.json
 # ═══════════════════════════════════════════════════════════════
 set -uo pipefail
 cd "$(dirname "$0")"
@@ -29,22 +31,43 @@ export https_proxy="100.68.162.212:3128"
 export http_proxy="100.68.162.212:3128"
 export HF_TOKEN="${HF_TOKEN:-}"
 
-DATASET="${1:?用法: bash run_eval_8gpu2.sh <dataset> [bsz] [ngpu] [original|remask|all] [gen_length]}"
-BSZ="${2:-16}"
-NGPU="${3:-0}"  # 0 = 自动检测全部
-RUN_MODE="${4:-all}"  # original / remask / all
-GEN_LENGTH="${5:-}"   # 空 = 用 eval 脚本默认值 (16384)
+# ── 解析命名参数 ──────────────────────────────────────────────
+DATASET=""
+BSZ=16
+NGPU=0          # 0 = 自动检测全部
+RUN_MODE="all"  # original / remask / all
+GEN_LENGTH=""   # 空 = 用 eval 脚本默认
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dataset)    DATASET="$2";    shift 2 ;;
+    --bsz)        BSZ="$2";       shift 2 ;;
+    --ngpu)       NGPU="$2";      shift 2 ;;
+    --mode)       RUN_MODE="$2";  shift 2 ;;
+    --gen_length) GEN_LENGTH="$2"; shift 2 ;;
+    *)
+      echo "Unknown arg: $1"
+      echo "Usage: bash run_eval_8gpu.sh --dataset <name> [--bsz N] [--ngpu N] [--mode original|remask|all] [--gen_length N]"
+      exit 1 ;;
+  esac
+done
+
+if [ -z "$DATASET" ]; then
+  echo "ERROR: --dataset is required"
+  echo "Usage: bash run_eval_8gpu.sh --dataset <name> [--bsz N] [--ngpu N] [--mode original|remask|all] [--gen_length N]"
+  exit 1
+fi
+
 ENV="${CONDA_ENV:-remask}"
 OUT="results_v2/${DATASET}"
 
-# 检测可用 GPU
+# ── 检测可用 GPU ──────────────────────────────────────────────
 if [ -n "${CUDA_VISIBLE_DEVICES:-}" ]; then
   IFS=',' read -ra ALL_GPUS <<< "$CUDA_VISIBLE_DEVICES"
 else
   ALL_GPUS=($(nvidia-smi --query-gpu=index --format=csv,noheader | tr -d ' '))
 fi
 
-# 如果指定了 ngpu, 截取前 N 张
 if [ "$NGPU" -gt 0 ] && [ "$NGPU" -lt "${#ALL_GPUS[@]}" ]; then
   ALL_GPUS=("${ALL_GPUS[@]:0:$NGPU}")
 fi
@@ -57,10 +80,12 @@ echo "Dataset: $DATASET  BSZ: $BSZ  GPUs: $SHARDS (${ALL_GPUS[*]})  Mode: $RUN_M
 
 mkdir -p "$OUT"
 
+# ── OOM 检测 ──────────────────────────────────────────────────
 is_oom() {
   grep -q "OutOfMemoryError\|CUDA out of memory" "$1" 2>/dev/null
 }
 
+# ── 启动单个 shard ────────────────────────────────────────────
 launch_shard() {
   local gpu_id=$1 shard_id=$2 bsz=$3 mode=$4 extra_args="$5" logfile="$6"
   CUDA_VISIBLE_DEVICES=$gpu_id PYTHONUNBUFFERED=1 conda run -n $ENV \
@@ -75,13 +100,13 @@ launch_shard() {
     > "$logfile" 2>&1
 }
 
+# ── 跑一个 mode (带 OOM 自动重试) ────────────────────────────
 run_mode() {
   local mode=$1
   local extra_args="${2:-}"
   echo ""
   echo "========== $DATASET  mode=$mode  bsz=$BSZ  shards=$SHARDS =========="
 
-  # --- 第一轮: 全部 shard 并行 ---
   pids=()
   for ((i=0; i<SHARDS; i++)); do
     gpu_id=${ALL_GPUS[$i]}
@@ -90,7 +115,6 @@ run_mode() {
     pids+=($!)
   done
 
-  # 收集结果, 记录 OOM 的 shard
   oom_shards=()
   ok=0
   non_oom_fail=0
@@ -110,7 +134,6 @@ run_mode() {
     fi
   done
 
-  # --- OOM 重试: 每轮减半 bsz, OOM 的 shard 并行重跑 ---
   local retry_bsz=$BSZ
   while [ ${#oom_shards[@]} -gt 0 ]; do
     retry_bsz=$((retry_bsz / 2))
@@ -155,6 +178,7 @@ run_mode() {
   [ $total_fail -gt 0 ] && echo "WARNING: $total_fail shards failed (non-OOM or bsz exhausted)"
 }
 
+# ── 合并 shard 结果 ──────────────────────────────────────────
 merge() {
   python3 << 'PYEOF'
 import json, os, sys
@@ -192,7 +216,6 @@ for tag, mode in [("original", "original"), ("remask_low_prob_None", "remask")]:
     total = len(all_results)
     acc = correct / total if total else 0
 
-    # F1/EM for drop/triviaqa
     has_f1 = any("f1" in r for r in all_results)
     has_em = any("em" in r for r in all_results)
 
@@ -255,7 +278,6 @@ for tag, mode in [("original", "original"), ("remask_low_prob_None", "remask")]:
         metric += f"  EM={summary['avg_em']*100:.2f}%"
     print(f"  {tag}: {correct}/{total}  {metric}  (wall={summary.get('time_s_max_shard',0):.0f}s)")
 
-    # Merge _samples.jsonl for coding tasks (humaneval/mbpp)
     sample_files = [os.path.join(out_dir, f"{tag}_shard{s}_samples.jsonl") for s in range(shards)]
     sample_files = [p for p in sample_files if os.path.exists(p)]
     if sample_files:
@@ -273,8 +295,8 @@ for tag, mode in [("original", "original"), ("remask_low_prob_None", "remask")]:
 PYEOF
 }
 
+# ── evalplus (coding benchmarks) ─────────────────────────────
 run_evalplus() {
-  # Run evalplus for coding benchmarks (humaneval/mbpp)
   case "$DATASET" in
     humaneval|mbpp) ;;
     *) return ;;
@@ -295,6 +317,7 @@ run_evalplus() {
   done
 }
 
+# ── 主流程 ───────────────────────────────────────────────────
 if [ "$RUN_MODE" = "original" ] || [ "$RUN_MODE" = "all" ]; then
   run_mode "original"
 fi

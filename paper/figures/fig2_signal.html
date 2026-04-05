@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Times New Roman', Georgia, serif; background: white; padding: 20px 24px; }
+
+  .note { margin-left: 80px; font-size: 11px; margin-bottom: 8px; }
+  .note.fail { color: #c62828; font-style: italic; }
+  .note.ok   { color: #2e7d32; font-style: italic; }
+  .note.neutral { color: #666; font-style: italic; }
+
+  .result-box { margin: 12px 0 0 0; padding: 10px 16px; border-radius: 6px;
+                text-align: center; max-width: 620px; }
+  .result-box.green { background: #e8f5e9; border: 1.5px solid #81c784; }
+  .result-box .title { font-weight: bold; font-size: 13px; font-style: italic; color: #2e7d32; }
+  .result-box .sub { font-size: 10.5px; color: #666; margin-top: 2px; }
+
+  .sig-block { margin-bottom: 16px; }
+  .sig-title { font-size: 12px; font-weight: bold; margin-bottom: 6px; }
+  .sig-grid { display: flex; gap: 3px; margin-left: 80px; }
+  .sig-cell { display: flex; flex-direction: column; align-items: center; min-width: 52px; }
+  .sig-tok { padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold;
+             border: 1px solid #ccc; text-align: center; width: 100%; }
+  .sig-prob { font-size: 9.5px; color: #666; margin-top: 2px; text-align: center; }
+  .sig-hint { font-size: 8.5px; color: #999; margin-top: 1px; text-align: center; font-style: italic; }
+  .sig-tok.c { background: #e8f5e9; border-color: #a5d6a7; color: #2e7d32; }
+  .sig-tok.e { background: #ffcdd2; border-color: #ef9a9a; color: #c62828; }
+  .sig-tok.m { background: #f5f5f5; border-color: #bdbdbd; color: #757575; }
+  .sig-tok.f { background: #e3f2fd; border-color: #64b5f6; color: #1565c0; }
+  .sig-tok.w { background: #fff3e0; border-color: #ffcc80; color: #e65100; }
+  .sig-tok.x { background: #ef5350; border-color: #c62828; color: white; }
+
+  .legend { display: flex; gap: 18px; justify-content: center; margin-top: 20px;
+            font-size: 11px; color: #555; flex-wrap: wrap; }
+  .legend-item { display: flex; align-items: center; gap: 5px; }
+  .legend-swatch { width: 16px; height: 16px; border-radius: 3px; border: 1px solid #bbb; }
+</style>
+</head>
+<body>
+
+<div style="margin-left: 10px;">
+
+  <!-- ① France (aligned) -->
+  <div class="sig-block">
+    <div class="sig-title" style="color:#2e7d32;">① Aligned signal: [X] = France (correct)</div>
+    <div class="sig-grid">
+      <div class="sig-cell"><div class="sig-tok c">I</div><div class="sig-prob">0.93</div></div>
+      <div class="sig-cell"><div class="sig-tok c">went</div><div class="sig-prob">0.81</div></div>
+      <div class="sig-cell"><div class="sig-tok c">to</div><div class="sig-prob">0.91</div></div>
+      <div class="sig-cell"><div class="sig-tok c">France</div><div class="sig-prob">0.41</div><div class="sig-hint">top: Paris .52</div></div>
+      <div class="sig-cell"><div class="sig-tok c">and</div><div class="sig-prob">0.93</div></div>
+      <div class="sig-cell"><div class="sig-tok c">visited</div><div class="sig-prob">0.62</div></div>
+      <div class="sig-cell"><div class="sig-tok c">the</div><div class="sig-prob">0.55</div></div>
+      <div class="sig-cell"><div class="sig-tok f" style="border-width:2px;"><b>Eiffel</b></div><div class="sig-prob"><b>0.97</b></div></div>
+      <div class="sig-cell"><div class="sig-tok c">Tower</div><div class="sig-prob">0.14</div><div class="sig-hint">top: iffel .42</div></div>
+      <div class="sig-cell"><div class="sig-tok c">.</div><div class="sig-prob">0.35</div></div>
+    </div>
+  </div>
+
+  <!-- ② [M] (null) -->
+  <div class="sig-block">
+    <div class="sig-title" style="color:#757575;">② Null signal: [X] = [M] (mask)</div>
+    <div class="sig-grid">
+      <div class="sig-cell"><div class="sig-tok c">I</div><div class="sig-prob">0.81</div></div>
+      <div class="sig-cell"><div class="sig-tok c">went</div><div class="sig-prob">0.70</div></div>
+      <div class="sig-cell"><div class="sig-tok c">to</div><div class="sig-prob">0.61</div></div>
+      <div class="sig-cell"><div class="sig-tok m">[M]</div><div class="sig-prob">—</div><div class="sig-hint">top: Paris .99</div></div>
+      <div class="sig-cell"><div class="sig-tok c">and</div><div class="sig-prob">0.80</div></div>
+      <div class="sig-cell"><div class="sig-tok c">visited</div><div class="sig-prob">0.57</div></div>
+      <div class="sig-cell"><div class="sig-tok c">the</div><div class="sig-prob">0.78</div></div>
+      <div class="sig-cell"><div class="sig-tok f" style="border-width:2px;"><b>Eiffel</b></div><div class="sig-prob"><b>0.82</b></div></div>
+      <div class="sig-cell"><div class="sig-tok c">Tower</div><div class="sig-prob">0.39</div></div>
+      <div class="sig-cell"><div class="sig-tok c">.</div><div class="sig-prob">0.44</div></div>
+    </div>
+    <div class="note neutral">Mask = neutral. Correct prediction preserved, confidence drops 0.97→0.82.</div>
+  </div>
+
+  <!-- ③ banana (adversarial unrelated) -->
+  <div class="sig-block">
+    <div class="sig-title" style="color:#e65100;">③ Adversarial (unrelated): [X] = banana</div>
+    <div class="sig-grid">
+      <div class="sig-cell"><div class="sig-tok c">I</div><div class="sig-prob">0.77</div></div>
+      <div class="sig-cell"><div class="sig-tok c">went</div><div class="sig-prob">0.35</div><div class="sig-hint">top: a .34</div></div>
+      <div class="sig-cell"><div class="sig-tok c">to</div><div class="sig-prob">0.26</div><div class="sig-hint">top: a .34</div></div>
+      <div class="sig-cell"><div class="sig-tok e">banana</div><div class="sig-prob">0.01</div><div class="sig-hint">top: Paris .37</div></div>
+      <div class="sig-cell"><div class="sig-tok c">and</div><div class="sig-prob">0.64</div></div>
+      <div class="sig-cell"><div class="sig-tok c">visited</div><div class="sig-prob">0.41</div></div>
+      <div class="sig-cell"><div class="sig-tok c">the</div><div class="sig-prob">0.62</div></div>
+      <div class="sig-cell"><div class="sig-tok w" style="border-width:2px;"><b>Eiffel</b></div><div class="sig-prob"><b>0.33</b></div><div class="sig-hint">London .06</div></div>
+      <div class="sig-cell"><div class="sig-tok c">Tower</div><div class="sig-prob">0.43</div></div>
+      <div class="sig-cell"><div class="sig-tok c">.</div><div class="sig-prob">0.39</div></div>
+    </div>
+    <div class="note fail">Nonsense disrupts all predictions. Target scatters: Eiffel 0.33, London 0.06, Empire 0.04.</div>
+  </div>
+
+  <!-- ④ Japan (adversarial related) -->
+  <div class="sig-block">
+    <div class="sig-title" style="color:#c62828;">④ Adversarial (related): [X] = Japan</div>
+    <div class="sig-grid">
+      <div class="sig-cell"><div class="sig-tok c">I</div><div class="sig-prob">0.87</div></div>
+      <div class="sig-cell"><div class="sig-tok c">went</div><div class="sig-prob">0.71</div></div>
+      <div class="sig-cell"><div class="sig-tok c">to</div><div class="sig-prob">0.83</div></div>
+      <div class="sig-cell"><div class="sig-tok e">Japan</div><div class="sig-prob">0.74</div></div>
+      <div class="sig-cell"><div class="sig-tok c">and</div><div class="sig-prob">0.92</div></div>
+      <div class="sig-cell"><div class="sig-tok c">visited</div><div class="sig-prob">0.71</div></div>
+      <div class="sig-cell"><div class="sig-tok c">the</div><div class="sig-prob">0.35</div><div class="sig-hint">top: a .39</div></div>
+      <div class="sig-cell"><div class="sig-tok x" style="border-width:2px;"><b>Tokyo ✗</b></div><div class="sig-prob"><b>0.91</b></div></div>
+      <div class="sig-cell"><div class="sig-tok c">Tower</div><div class="sig-prob">0.28</div></div>
+      <div class="sig-cell"><div class="sig-tok c">.</div><div class="sig-prob">0.36</div></div>
+    </div>
+    <div class="note fail">Semantically related error → model confidently predicts wrong answer (Tokyo 0.91).</div>
+  </div>
+
+  <div class="result-box green" style="max-width: 640px;">
+    <div class="title">Context signal hierarchy (Remark 1)</div>
+    <div class="sub">
+      <b>Aligned</b> (France → Eiffel <b>0.97</b>) &gt; <b>Null</b> ([M] → Eiffel <b>0.82</b>) &gt; <b>Adversarial</b> (Japan → <span style="color:#c62828;">Tokyo 0.91 ✗</span>)<br>
+      Mask tokens are neutral: they reduce confidence but preserve the correct prediction direction.<br>
+      Erroneous tokens actively bias predictions toward wrong answers — especially when semantically related.<br>
+      T2M converts adversarial → null (safe); T2T may replace adversarial → adversarial (unsafe).
+    </div>
+  </div>
+
+</div>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-swatch" style="background:#e8f5e9; border-color:#a5d6a7;"></div> Correct token</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#ffcdd2; border-color:#ef9a9a;"></div> Erroneous token</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#f5f5f5; border-color:#bdbdbd;"></div> Mask [M]</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#e3f2fd; border-color:#64b5f6;"></div> Predicted (correct)</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#fff3e0; border-color:#ffcc80;"></div> Predicted (degraded)</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#ef5350; border-color:#c62828;"></div> Predicted (wrong)</div>
+</div>
+
+</body>
+</html>

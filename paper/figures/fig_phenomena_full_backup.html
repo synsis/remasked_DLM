@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Times New Roman', Georgia, serif; background: white; padding: 20px 24px; }
+  .section { margin-bottom: 32px; }
+  .section-title { font-size: 15px; font-weight: bold; margin-bottom: 12px; color: #333; border-bottom: 2px solid #ddd; padding-bottom: 4px; }
+  .container { display: flex; gap: 50px; }
+  .panel { flex: 1; }
+  .panel-title { font-size: 14px; font-weight: bold; margin-bottom: 10px; }
+  .panel-title.t2t { color: #c62828; }
+  .panel-title.t2m { color: #2e7d32; }
+
+  .step-row { display: flex; align-items: center; margin-bottom: 5px; }
+  .step-label { width: 75px; font-size: 12px; color: #666; flex-shrink: 0; }
+
+  .tokens { display: flex; gap: 4px; }
+  .tok { display: inline-flex; align-items: center; justify-content: center;
+         padding: 5px 10px; border-radius: 5px; font-size: 13px; font-weight: bold;
+         border: 1px solid #ccc; min-width: 36px; }
+  .tok.correct { background: #e8f5e9; border-color: #a5d6a7; color: #2e7d32; }
+  .tok.error   { background: #ffcdd2; border-color: #ef9a9a; color: #c62828; }
+  .tok.mask    { background: #f5f5f5; border-color: #bdbdbd; color: #757575; }
+  .tok.fixed   { background: #e3f2fd; border-color: #64b5f6; color: #1565c0; }
+  .tok.t2t-ed  { background: #ef5350; border-color: #c62828; color: white; }
+  .tok.remask  { background: #ffd54f; border-color: #f9a825; color: #795548; }
+  .tok.dim     { background: #fafafa; border-color: #e0e0e0; color: #bbb; font-size: 11px; }
+  .tok.propagated { background: #ffcdd2; border-color: #ef9a9a; color: #c62828; font-size: 11px; }
+
+  .block-label { font-size: 10px; color: #999; margin-left: 75px; margin-bottom: 2px; font-style: italic; }
+  .block-divider { border-top: 1px dashed #ccc; margin: 8px 0 8px 75px; }
+
+  .note { margin-left: 75px; font-size: 11px; margin-bottom: 8px; }
+  .note.fail { color: #c62828; font-style: italic; }
+  .note.ok   { color: #2e7d32; font-style: italic; }
+  .note.neutral { color: #666; font-style: italic; }
+
+  .decision-box { margin: 8px 0 8px 75px; padding: 8px 14px; border-radius: 5px;
+                   font-size: 11.5px; line-height: 1.5; }
+  .decision-box.red  { background: #fff8e1; border-left: 3px solid #ef9a9a; }
+  .decision-box.green { background: #e8f5e9; border-left: 3px solid #81c784; }
+  .decision-box.yellow { background: #fffde7; border-left: 3px solid #ffd54f; }
+  .decision-box .formula { font-weight: bold; }
+  .decision-box.red .formula { color: #c62828; }
+  .decision-box.green .formula { color: #2e7d32; }
+  .decision-box.yellow .formula { color: #f57f17; }
+
+  .arrow-text { margin-left: 75px; font-size: 11.5px; font-weight: bold; margin: 6px 0; }
+  .arrow-text.green { color: #2e7d32; }
+  .arrow-text.green::before { content: "↓ "; }
+
+  .result-box { margin: 12px 0 0 75px; padding: 10px 16px; border-radius: 6px;
+                text-align: center; max-width: 360px; }
+  .result-box.red { background: #ffebee; border: 1.5px solid #ef9a9a; }
+  .result-box.green { background: #e8f5e9; border: 1.5px solid #81c784; }
+  .result-box .title { font-weight: bold; font-size: 13px; font-style: italic; }
+  .result-box.red .title { color: #c62828; }
+  .result-box.green .title { color: #2e7d32; }
+  .result-box .sub { font-size: 10.5px; color: #666; margin-top: 2px; }
+
+  .legend { display: flex; gap: 18px; justify-content: center; margin-top: 20px;
+            font-size: 11px; color: #555; flex-wrap: wrap; }
+  .legend-item { display: flex; align-items: center; gap: 5px; }
+  .legend-swatch { width: 16px; height: 16px; border-radius: 3px; border: 1px solid #bbb; }
+</style>
+</head>
+<body>
+
+<!-- ============================================================ -->
+<!-- (a) Correction Inertia — from fig1, real probs from LLaDA2.1 -->
+<!-- ============================================================ -->
+<div class="section">
+<div class="section-title">(a) Correction Inertia — "He felt very purple."</div>
+
+<div class="container">
+<div class="panel">
+  <div class="panel-title t2t">T2T Editing</div>
+
+  <div class="step-row">
+    <div class="step-label">Step <i>t</i></div>
+    <div class="tokens">
+      <span class="tok correct">He</span>
+      <span class="tok correct">felt</span>
+      <span class="tok correct">very</span>
+      <span class="tok error">purple</span>
+      <span class="tok correct">.</span>
+    </div>
+  </div>
+
+  <div class="decision-box red">
+    <div class="formula">max<sub>v</sub> p<sub>θ</sub>(v) = 0.12 &lt; τ<sub>t2t</sub> = 0.5</div>
+    <div style="font-size:11px; color:#888;">"sad": 0.12 · "happy": 0.11 · "excited": 0.05</div>
+    <div class="formula">→ No action (multimodal — no candidate qualifies)</div>
+  </div>
+
+  <div class="step-row">
+    <div class="step-label">Step <i>t</i>+1</div>
+    <div class="tokens">
+      <span class="tok correct">He</span>
+      <span class="tok correct">felt</span>
+      <span class="tok correct">very</span>
+      <span class="tok error">purple</span>
+      <span class="tok correct">.</span>
+    </div>
+  </div>
+  <div class="note fail">✗ stuck — error persists, pollutes context</div>
+
+  <div class="result-box red">
+    <div class="title">Correction inertia</div>
+    <div class="sub">Error detected but cannot be corrected —<br>no single replacement exceeds threshold</div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-title t2m">T2M Remasking</div>
+
+  <div class="step-row">
+    <div class="step-label">Step <i>t</i></div>
+    <div class="tokens">
+      <span class="tok correct">He</span>
+      <span class="tok correct">felt</span>
+      <span class="tok correct">very</span>
+      <span class="tok error">purple</span>
+      <span class="tok correct">.</span>
+    </div>
+  </div>
+
+  <div class="decision-box green">
+    <div class="formula">p<sub>θ</sub>("purple") = 0.00002 &lt; τ<sub>lp</sub> = 0.5</div>
+    <div class="formula">→ Reset to [M] (remask)</div>
+  </div>
+
+  <div class="step-row">
+    <div class="step-label">Step <i>t</i>+1</div>
+    <div class="tokens">
+      <span class="tok correct">He</span>
+      <span class="tok correct">felt</span>
+      <span class="tok correct">very</span>
+      <span class="tok mask">[M]</span>
+      <span class="tok correct">.</span>
+    </div>
+  </div>
+  <div class="note neutral">neutral signal — no semantic bias</div>
+
+  <div class="arrow-text green">M2T re-predicts under clean context</div>
+
+  <div class="step-row">
+    <div class="step-label">Step <i>t</i>+2</div>
+    <div class="tokens">
+      <span class="tok correct">He</span>
+      <span class="tok correct">felt</span>
+      <span class="tok correct">very</span>
+      <span class="tok fixed">sad</span>
+      <span class="tok correct">.</span>
+    </div>
+  </div>
+  <div class="note ok">✓ correct — context purification succeeds</div>
+
+  <div class="result-box green">
+    <div class="title">Context purification + Delayed commitment</div>
+    <div class="sub">Clean context enables correct re-prediction</div>
+  </div>
+</div>
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- (b) Context Pollution — from DROP 160 (real data) -->
+<!-- ============================================================ -->
+<div class="section">
+<div class="section-title">(b) Premature Replacement under Incomplete Context — DROP: "How many are military specialists or civil servants?" (gold = 857)</div>
+
+<div class="container">
+<div class="panel">
+  <div class="panel-title t2t">T2T Editing → "657" (wrong)</div>
+
+  <div class="block-label">Block i — answer digits</div>
+  <div class="step-row">
+    <div class="step-label">Step <i>t</i></div>
+    <div class="tokens">
+      <span class="tok correct">The</span>
+      <span class="tok correct">answer</span>
+      <span class="tok correct">is</span>
+      <span class="tok correct">8</span>
+      <span class="tok correct">5</span>
+      <span class="tok mask">[M]</span>
+    </div>
+  </div>
+
+  <div class="decision-box red">
+    <div class="formula">p(8)=0.11, p(6)=0.64 > τ<sub>t2t</sub>=0.5 → replaces 8→6</div>
+  </div>
+
+  <div class="step-row">
+    <div class="step-label">Step <i>t</i>+1</div>
+    <div class="tokens">
+      <span class="tok correct">The</span>
+      <span class="tok correct">answer</span>
+      <span class="tok correct">is</span>
+      <span class="tok t2t-ed">6</span>
+      <span class="tok correct">5</span>
+      <span class="tok correct">7</span>
+    </div>
+  </div>
+  <div class="note fail">✗ "657" committed with error at hundreds digit</div>
+
+  <div class="block-divider"></div>
+  <div class="block-label">Block i+1 — continuation (sees "657" as frozen context)</div>
+  <div class="step-row">
+    <div class="step-label">Block <i>i</i>+1</div>
+    <div class="tokens">
+      <span class="tok dim">…</span>
+      <span class="tok propagated">657</span>
+      <span class="tok dim">is</span>
+      <span class="tok propagated">wrong</span>
+      <span class="tok dim">…</span>
+    </div>
+  </div>
+  <div class="note fail">Erroneous "657" is frozen → pollutes all subsequent predictions</div>
+
+  <div class="result-box red">
+    <div class="title">Premature replacement</div>
+    <div class="sub">At <i>t</i>=1 neighbors "5" and "7" are still [M] → context incomplete.<br>
+    T2T replaces "8"→"6" based on unreliable signal. Once committed, irreversible.</div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-title t2m">T2M Remasking → "857" (correct)</div>
+
+  <div class="block-label">Block i — answer digits</div>
+  <div class="step-row">
+    <div class="step-label">Step <i>t</i></div>
+    <div class="tokens">
+      <span class="tok correct">The</span>
+      <span class="tok correct">answer</span>
+      <span class="tok correct">is</span>
+      <span class="tok correct">8</span>
+      <span class="tok correct">5</span>
+      <span class="tok mask">[M]</span>
+    </div>
+  </div>
+
+  <div class="decision-box yellow">
+    <div class="formula">p(8)=0.11 < τ<sub>lp</sub>=0.5 → remask 8→[M]</div>
+  </div>
+
+  <div class="step-row">
+    <div class="step-label">Step <i>t</i>+1</div>
+    <div class="tokens">
+      <span class="tok correct">The</span>
+      <span class="tok correct">answer</span>
+      <span class="tok correct">is</span>
+      <span class="tok remask">[M]</span>
+      <span class="tok correct">5</span>
+      <span class="tok correct">7</span>
+    </div>
+  </div>
+
+  <div class="arrow-text green">M2T re-predicts: p(8)=0.94 > τ<sub>m2t</sub>=0.7 → fill</div>
+
+  <div class="step-row">
+    <div class="step-label">Step <i>t</i>+2</div>
+    <div class="tokens">
+      <span class="tok correct">The</span>
+      <span class="tok correct">answer</span>
+      <span class="tok correct">is</span>
+      <span class="tok fixed">8</span>
+      <span class="tok correct">5</span>
+      <span class="tok correct">7</span>
+    </div>
+  </div>
+  <div class="note ok">✓ "857" → clean context for block <i>i</i>+1</div>
+
+  <div class="result-box green">
+    <div class="title">Context purification + Delayed commitment</div>
+    <div class="sub">T2M remasks "8" instead of replacing it. At <i>t</i>=2, "5" and "7" are committed →<br>
+    richer context → re-predicts "8" with p=0.94.</div>
+  </div>
+</div>
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- (c) Delayed Commitment — DROP 75 (real model data) -->
+<!-- ============================================================ -->
+<div class="section">
+<div class="section-title">(c) Delayed Commitment — DROP: "Who threw the first touchdown pass?" (gold = Jon Kitna)</div>
+
+<div class="container">
+<div class="panel">
+  <div class="panel-title t2t">T2T Editing → "Kitna" (wrong)</div>
+
+  <div class="step-row">
+    <div class="step-label"><i>t</i>=1</div>
+    <div class="tokens">
+      <span class="tok correct">The</span>
+      <span class="tok correct">answer</span>
+      <span class="tok correct">is</span>
+      <span class="tok correct">Jon</span>
+      <span class="tok correct">na</span>
+      <span class="tok mask">[M]</span>
+      <span class="tok mask">[M]</span>
+    </div>
+  </div>
+  <div class="note neutral">M2T fills "Jon"(0.82) "na"(0.74)</div>
+
+  <div class="step-row">
+    <div class="step-label"><i>t</i>=2–3</div>
+    <div class="tokens">
+      <span class="tok correct">The</span>
+      <span class="tok correct">answer</span>
+      <span class="tok correct">is</span>
+      <span class="tok correct">Jon</span>
+      <span class="tok correct">na</span>
+      <span class="tok correct">.</span>
+      <span class="tok correct">&lt;end&gt;</span>
+    </div>
+  </div>
+  <div class="note neutral">"Jon"(p=0.59→0.30) drops as more context fills in</div>
+
+  <div class="decision-box red">
+    <div class="formula"><i>t</i>=4: p("Jon")=0.30, top1="Kit" p=0.57 > τ<sub>t2t</sub>=0.5</div>
+    <div style="font-size:11px; color:#c62828;">→ T2T replaces "Jon" → "Kit"</div>
+  </div>
+
+  <div class="step-row">
+    <div class="step-label"><i>t</i>=4</div>
+    <div class="tokens">
+      <span class="tok correct">The</span>
+      <span class="tok correct">answer</span>
+      <span class="tok correct">is</span>
+      <span class="tok t2t-ed">Kit</span>
+      <span class="tok correct">na</span>
+      <span class="tok correct">.</span>
+      <span class="tok correct">&lt;end&gt;</span>
+    </div>
+  </div>
+  <div class="note fail">✗ "Kitna" — "Jon" irrecoverably replaced</div>
+
+  <div class="result-box red">
+    <div class="title">Premature commitment</div>
+    <div class="sub">p("Jon")=0.30 while p("Kit")=0.57 > τ → T2T replaces "Jon"→"Kit".<br>
+    "Kit"+"na" reinforces "Kitna" — "Jon" is irrecoverable.</div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-title t2m">T2M Remasking → "Jon Kitna" (correct)</div>
+
+  <div class="step-row">
+    <div class="step-label"><i>t</i>=1</div>
+    <div class="tokens">
+      <span class="tok correct">The</span>
+      <span class="tok correct">answer</span>
+      <span class="tok correct">is</span>
+      <span class="tok correct">Jon</span>
+      <span class="tok correct">na</span>
+      <span class="tok mask">[M]</span>
+      <span class="tok mask">[M]</span>
+    </div>
+  </div>
+  <div class="note neutral">Same start: "Jon"(0.82) "na"(0.74)</div>
+
+  <div class="decision-box yellow">
+    <div class="formula"><i>t</i>=2: p("na")=0.21 < τ<sub>lp</sub>=0.5 → remask; "."(0.82) fills</div>
+  </div>
+
+  <div class="step-row">
+    <div class="step-label"><i>t</i>=2</div>
+    <div class="tokens">
+      <span class="tok correct">…</span>
+      <span class="tok correct">Jon</span>
+      <span class="tok remask">[M]</span>
+      <span class="tok correct">.</span>
+      <span class="tok mask">[M]</span>
+    </div>
+  </div>
+
+  <div class="decision-box green">
+    <div class="formula"><i>t</i>=3: [M]→"Kit"(0.91) fill; p(".")=0.45 → remask</div>
+  </div>
+
+  <div class="decision-box yellow">
+    <div class="formula"><i>t</i>=4: p("Kit")=0.47 → remask; [M]→"na"(0.96) fill</div>
+  </div>
+
+  <div class="decision-box green">
+    <div class="formula"><i>t</i>=5–6: "Kit"(1.00) re-fill; "na"(0.99) re-fill</div>
+  </div>
+
+  <div class="step-row">
+    <div class="step-label"><i>t</i>=7</div>
+    <div class="tokens">
+      <span class="tok correct">The</span>
+      <span class="tok correct">answer</span>
+      <span class="tok correct">is</span>
+      <span class="tok correct">Jon</span>
+      <span class="tok correct">Kit</span>
+      <span class="tok correct">na</span>
+      <span class="tok correct">.</span>
+    </div>
+  </div>
+  <div class="note ok">✓ All p≥0.98 → "Jon Kitna" ✓</div>
+
+  <div class="result-box green">
+    <div class="title">Delayed commitment</div>
+    <div class="sub">"Kit" and "na" remask 6 times total; each re-prediction sees more<br>
+    converged context. "Jon" preserved (p≥0.69); final: "Kit"(0.98)+"na"(0.99).</div>
+  </div>
+</div>
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- (d) Context Signal Hierarchy — real model probabilities -->
+<!-- "I went to [X] and visited the [M] Tower ." -->
+<!-- Each variant: original sequence row + model prediction row -->
+<!-- ============================================================ -->
+<div class="section">
+<div class="section-title">(d) Context Signal Hierarchy — "I went to [X] and visited the [M] Tower."</div>
+
+<div style="margin-left: 10px;">
+
+  <style>
+    .sig-block { margin-bottom: 16px; }
+    .sig-title { font-size: 12px; font-weight: bold; margin-bottom: 6px; }
+    .sig-grid { display: flex; gap: 3px; margin-left: 80px; }
+    .sig-cell { display: flex; flex-direction: column; align-items: center; min-width: 52px; }
+    .sig-tok { padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold;
+               border: 1px solid #ccc; text-align: center; width: 100%; }
+    .sig-prob { font-size: 9.5px; color: #666; margin-top: 2px; text-align: center; }
+    .sig-hint { font-size: 8.5px; color: #999; margin-top: 1px; text-align: center; font-style: italic; }
+    .sig-tok.c { background: #e8f5e9; border-color: #a5d6a7; color: #2e7d32; }
+    .sig-tok.e { background: #ffcdd2; border-color: #ef9a9a; color: #c62828; }
+    .sig-tok.m { background: #f5f5f5; border-color: #bdbdbd; color: #757575; }
+    .sig-tok.f { background: #e3f2fd; border-color: #64b5f6; color: #1565c0; }
+    .sig-tok.w { background: #fff3e0; border-color: #ffcc80; color: #e65100; }
+    .sig-tok.x { background: #ef5350; border-color: #c62828; color: white; }
+  </style>
+
+  <!-- ① France (aligned) -->
+  <div class="sig-block">
+    <div class="sig-title" style="color:#2e7d32;">① Aligned signal: [X] = France (correct)</div>
+    <div class="sig-grid">
+      <div class="sig-cell"><div class="sig-tok c">I</div><div class="sig-prob">0.93</div></div>
+      <div class="sig-cell"><div class="sig-tok c">went</div><div class="sig-prob">0.81</div></div>
+      <div class="sig-cell"><div class="sig-tok c">to</div><div class="sig-prob">0.91</div></div>
+      <div class="sig-cell"><div class="sig-tok c">France</div><div class="sig-prob">0.41</div><div class="sig-hint">top: Paris .52</div></div>
+      <div class="sig-cell"><div class="sig-tok c">and</div><div class="sig-prob">0.93</div></div>
+      <div class="sig-cell"><div class="sig-tok c">visited</div><div class="sig-prob">0.62</div></div>
+      <div class="sig-cell"><div class="sig-tok c">the</div><div class="sig-prob">0.55</div></div>
+      <div class="sig-cell"><div class="sig-tok f" style="border-width:2px;"><b>Eiffel</b></div><div class="sig-prob"><b>0.97</b></div></div>
+      <div class="sig-cell"><div class="sig-tok c">Tower</div><div class="sig-prob">0.14</div><div class="sig-hint">top: iffel .42</div></div>
+      <div class="sig-cell"><div class="sig-tok c">.</div><div class="sig-prob">0.35</div></div>
+    </div>
+  </div>
+
+  <!-- ② [M] (null) -->
+  <div class="sig-block">
+    <div class="sig-title" style="color:#757575;">② Null signal: [X] = [M] (mask)</div>
+    <div class="sig-grid">
+      <div class="sig-cell"><div class="sig-tok c">I</div><div class="sig-prob">0.81</div></div>
+      <div class="sig-cell"><div class="sig-tok c">went</div><div class="sig-prob">0.70</div></div>
+      <div class="sig-cell"><div class="sig-tok c">to</div><div class="sig-prob">0.61</div></div>
+      <div class="sig-cell"><div class="sig-tok m">[M]</div><div class="sig-prob">—</div><div class="sig-hint">top: Paris .99</div></div>
+      <div class="sig-cell"><div class="sig-tok c">and</div><div class="sig-prob">0.80</div></div>
+      <div class="sig-cell"><div class="sig-tok c">visited</div><div class="sig-prob">0.57</div></div>
+      <div class="sig-cell"><div class="sig-tok c">the</div><div class="sig-prob">0.78</div></div>
+      <div class="sig-cell"><div class="sig-tok f" style="border-width:2px;"><b>Eiffel</b></div><div class="sig-prob"><b>0.82</b></div></div>
+      <div class="sig-cell"><div class="sig-tok c">Tower</div><div class="sig-prob">0.39</div></div>
+      <div class="sig-cell"><div class="sig-tok c">.</div><div class="sig-prob">0.44</div></div>
+    </div>
+    <div class="note neutral">Mask = neutral. Correct prediction preserved, confidence drops 0.97→0.82.</div>
+  </div>
+
+  <!-- ③ banana (adversarial unrelated) -->
+  <div class="sig-block">
+    <div class="sig-title" style="color:#e65100;">③ Adversarial (unrelated): [X] = banana</div>
+    <div class="sig-grid">
+      <div class="sig-cell"><div class="sig-tok c">I</div><div class="sig-prob">0.77</div></div>
+      <div class="sig-cell"><div class="sig-tok c">went</div><div class="sig-prob">0.35</div><div class="sig-hint">top: a .34</div></div>
+      <div class="sig-cell"><div class="sig-tok c">to</div><div class="sig-prob">0.26</div><div class="sig-hint">top: a .34</div></div>
+      <div class="sig-cell"><div class="sig-tok e">banana</div><div class="sig-prob">0.01</div><div class="sig-hint">top: Paris .37</div></div>
+      <div class="sig-cell"><div class="sig-tok c">and</div><div class="sig-prob">0.64</div></div>
+      <div class="sig-cell"><div class="sig-tok c">visited</div><div class="sig-prob">0.41</div></div>
+      <div class="sig-cell"><div class="sig-tok c">the</div><div class="sig-prob">0.62</div></div>
+      <div class="sig-cell"><div class="sig-tok w" style="border-width:2px;"><b>Eiffel</b></div><div class="sig-prob"><b>0.33</b></div><div class="sig-hint">London .06</div></div>
+      <div class="sig-cell"><div class="sig-tok c">Tower</div><div class="sig-prob">0.43</div></div>
+      <div class="sig-cell"><div class="sig-tok c">.</div><div class="sig-prob">0.39</div></div>
+    </div>
+    <div class="note fail">Nonsense disrupts all predictions. [M] scatters: Eiffel 0.33, London 0.06, Empire 0.04.</div>
+  </div>
+
+  <!-- ④ Japan (adversarial related) -->
+  <div class="sig-block">
+    <div class="sig-title" style="color:#c62828;">④ Adversarial (related): [X] = Japan</div>
+    <div class="sig-grid">
+      <div class="sig-cell"><div class="sig-tok c">I</div><div class="sig-prob">0.87</div></div>
+      <div class="sig-cell"><div class="sig-tok c">went</div><div class="sig-prob">0.71</div></div>
+      <div class="sig-cell"><div class="sig-tok c">to</div><div class="sig-prob">0.83</div></div>
+      <div class="sig-cell"><div class="sig-tok e">Japan</div><div class="sig-prob">0.74</div></div>
+      <div class="sig-cell"><div class="sig-tok c">and</div><div class="sig-prob">0.92</div></div>
+      <div class="sig-cell"><div class="sig-tok c">visited</div><div class="sig-prob">0.71</div></div>
+      <div class="sig-cell"><div class="sig-tok c">the</div><div class="sig-prob">0.35</div><div class="sig-hint">top: a .39</div></div>
+      <div class="sig-cell"><div class="sig-tok x" style="border-width:2px;"><b>Tokyo ✗</b></div><div class="sig-prob"><b>0.91</b></div></div>
+      <div class="sig-cell"><div class="sig-tok c">Tower</div><div class="sig-prob">0.28</div><div class="sig-hint">top: Tower .28</div></div>
+      <div class="sig-cell"><div class="sig-tok c">.</div><div class="sig-prob">0.36</div></div>
+    </div>
+    <div class="note fail">Semantically related error → model confidently predicts wrong answer (Tokyo 0.91).</div>
+  </div>
+
+  <div class="result-box green" style="margin-left: 0; margin-top: 10px; max-width: 620px;">
+    <div class="title">Context signal hierarchy (Remark 1)</div>
+    <div class="sub">
+      <b>Aligned</b> (France → Eiffel <b>0.97</b>) &gt; <b>Null</b> ([M] → Eiffel <b>0.82</b>) &gt; <b>Adversarial</b> (Japan → <span style="color:#c62828;">Tokyo 0.91 ✗</span>)<br>
+      Mask is neutral: reduces confidence but doesn't mislead.<br>
+      Adversarial context actively biases prediction toward wrong answers.<br>
+      T2M converts adversarial → null; T2T may replace adversarial → adversarial.
+    </div>
+  </div>
+
+</div>
+</div>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-swatch" style="background:#e8f5e9; border-color:#a5d6a7;"></div> Correct</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#ffcdd2; border-color:#ef9a9a;"></div> Erroneous</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#ef5350; border-color:#c62828;"></div> T2T edited</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#ffd54f; border-color:#f9a825;"></div> T2M remasked</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#f5f5f5; border-color:#bdbdbd;"></div> Mask [M]</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#e3f2fd; border-color:#64b5f6;"></div> Re-predicted</div>
+</div>
+
+</body>
+</html>
