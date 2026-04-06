@@ -4,6 +4,8 @@ python -m eval.mmlu_pro --mode original --batch_size 4
 """
 
 import argparse
+import os
+
 import remask.env  # noqa: F401
 
 from datasets import load_dataset

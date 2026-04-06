@@ -283,9 +283,9 @@ LLaDA2.1 employs a dual-stream training objective~\citep{nie2026llada21}: the \M
 \begin{equation}
     \underbrace{\{\mathbf{z}_{\text{correct}}, \mathbf{z}_{\text{error}}\}}_{\text{context with errors}} \xrightarrow{\text{T2M}} \underbrace{\{\mathbf{z}_{\text{correct}}, \mask{}\}}_{\text{cleaner context}},
 \end{equation}
-\TtoM{} replaces actively misleading signals with neutral ``unknown'' markers. Since \MtoT{} prediction from \mask{} context is the foundational capability of masked diffusion models, this conversion leverages the model's most reliable mode of operation.
+\TtoM{} replaces actively misleading signals with neutral ``unknown'' markers, converting the context back to a form the model handles most reliably. Figure~\ref{fig:signal} illustrates this mismatch concretely: random perturbations during \TtoT{} training resemble ``banana'' replacing ``France''---semantically incoherent noise that merely degrades confidence ($p(\text{Eiffel}){=}0.33$) without directional bias. In contrast, actual inference-time errors resemble ``Japan'' replacing ``France''---semantically related, locally coherent errors that \emph{actively mislead} the model toward high-confidence wrong predictions ($p(\text{Tokyo}){=}0.91$). This distributional gap is the essence of the train--inference mismatch. \mask{} avoids both failure modes entirely ($p(\text{Eiffel}){=}0.82$).
 
-\paragraph{Analogy with continuous diffusion.} In continuous diffusion models~\citep{ho2020ddpm,song2021scorebased}, the denoising score function $\nabla_{\mathbf{x}} \log p(\mathbf{x})$ is trained with Gaussian noise. If the noise distribution at test time deviates from the training distribution (e.g., structured adversarial perturbations instead of random Gaussian noise), score estimation degrades. Analogously, in masked diffusion, the model is trained with two noise types: \mask{} tokens (\MtoT{}) and random token perturbations (\TtoT{}). Inference-time errors---systematic, correlated, semantically plausible---constitute a third, unseen noise type. \TtoM{} addresses this by converting the unseen noise back to the familiar \mask{} type.
+\paragraph{Analogy with continuous diffusion.} In continuous diffusion models~\citep{ho2020ddpm,song2021scorebased}, the denoising score function $\nabla_{\mathbf{x}} \log p(\mathbf{x})$ is trained with Gaussian noise. If the noise distribution at test time deviates from the training distribution (e.g., structured adversarial perturbations instead of random Gaussian noise), score estimation degrades. Analogously, in masked diffusion, the model is trained with two noise types: \mask{} tokens (\MtoT{}) and random token perturbations (\TtoT{}). Inference-time errors---systematic, correlated, semantically plausible---constitute a third, unseen noise type (see Figure~\ref{fig:signal}). \TtoM{} addresses this by converting the unseen noise back to the familiar \mask{} type.
 
 \subsection{Delayed Commitment and Joint Optimization}
 
@@ -363,7 +363,7 @@ Our approach offers principled advantages over existing remasking methods along 
 
 \paragraph{Baselines.} Our primary comparison is between the original \TtoT{} editing (``Original'') and \TtoM{} remasking with the configuration described above. All methods use the same model and inference parameters, isolating the effect of the editing mechanism.
 
-\paragraph{Evaluation note.} We use the official LLaDA2.1 model weights and official benchmark datasets. As LLaDA2.1 does not release its evaluation code, our reproduced baseline absolute scores may differ from the original paper due to prompt template or answer extraction differences; all \TtoT{} vs.\ \TtoM{} comparisons use \emph{identical} evaluation pipelines.
+\paragraph{Evaluation note.} We use the official LLaDA2.1 model weights, the HuggingFace-provided inference code, and official benchmark datasets. As LLaDA2.1 does not release its evaluation code, our reproduced baseline absolute scores may differ from the original paper due to prompt template or answer extraction differences; all \TtoT{} vs.\ \TtoM{} comparisons use \emph{identical} evaluation pipelines.
 
 \paragraph{Benchmarks.} We evaluate on 9 benchmarks spanning five categories: \textbf{Knowledge} (GPQA-Diamond~\citep{rein2024gpqa}, TriviaQA~\citep{joshi2017triviaqa}), \textbf{Reasoning} (HellaSwag~\citep{zellers2019hellaswag}, PIQA~\citep{bisk2020piqa}, DROP~\citep{dua2019drop}), \textbf{Mathematics} (CMATH~\citep{wei2023cmath}, AIME~2025~\citep{aime2025}), \textbf{Coding} (HumanEval+~\citep{chen2021humaneval,liu2023evalplus}), and \textbf{Instruction Following} (IFEval~\citep{zhou2023ifeval}).
 
@@ -401,7 +401,7 @@ Instruction
 \end{tabular}
 \end{table}
 
-Table~\ref{tab:main} presents the main results. \TtoM{} remasking yields the largest gains on \textbf{mathematics} tasks (CMATH $+5.8$, AIME~2025 $+6.7$\footnote{AIME~2025 contains only 30 problems; the $+6.7\%$ gain corresponds to 2 additional correct answers and should be interpreted with caution given the small sample size.}), where final answers are exact numbers and even a single corrupted digit causes failure. Improvements are also observed on \textbf{knowledge and extractive QA} (GPQA $+1.0$, TriviaQA $+1.2$ F1, DROP $+0.6$ F1), where answers are short spans requiring precise token-level reproduction, and on \textbf{instruction following} (IFEval $+0.4$). On \textbf{commonsense reasoning} tasks (HellaSwag, PIQA), performance is essentially unchanged ($-0.1$/$-0.1$): outputs are short ($\sim$100--140 tokens) and rarely suffer from corruption. On \textbf{coding} (HumanEval+), no difference is observed ($\pm 0.0$). We analyze these task-dependent patterns in Section~\ref{sec:analysis}.
+Table~\ref{tab:main} presents the main results. \TtoM{} remasking yields the largest gains on \textbf{mathematics} tasks (CMATH $+5.8$, AIME~2025 $+6.7$), where final answers are exact numbers and even a single corrupted digit causes failure. Improvements are also observed on \textbf{knowledge and extractive QA} (GPQA $+1.0$, TriviaQA $+1.2$ F1, DROP $+0.6$ F1), where answers are short spans requiring precise token-level reproduction, and on \textbf{instruction following} (IFEval $+0.4$). On \textbf{commonsense reasoning} tasks (HellaSwag, PIQA), performance is essentially unchanged ($-0.1$/$-0.1$): outputs are short ($\sim$100--140 tokens) and rarely suffer from corruption. On \textbf{coding} (HumanEval+), no difference is observed ($\pm 0.0$). We analyze these task-dependent patterns in Section~\ref{sec:analysis}.
 
 \subsection{Ablation Studies}
 
@@ -591,29 +591,13 @@ Figure~\ref{fig:case_study} shows three representative CMATH cases from the corr
 \setlength{\fboxrule}{0.4pt}
 
 \noindent\fbox{\parbox{0.96\textwidth}{%
-\textbf{Case 1: Extra digits appended} \hfill Gold: \textbf{17}\\[3pt]
-\textit{Q: A fruit shop has 25 baskets of apples. Apples exceed pears by 8 baskets. How many baskets of pears are there?}\\[3pt]
-\textbf{\TtoT{}}: \quad Reasoning: $25 - 8 = 17$ ~\checkmark \quad$\to$\quad Final answer: \textcolor{red}{\textbf{177}} ~\ding{55}\\
-\textbf{\TtoM{}}: \quad Reasoning: $25 - 8 = 17$ ~\checkmark \quad$\to$\quad Final answer: \textcolor{teal}{\textbf{17}} ~\checkmark
-}}
-
-\vspace{6pt}
-\noindent\fbox{\parbox{0.96\textwidth}{%
-\textbf{Case 2: Leading digits dropped + answer marker repeated} \hfill Gold: \textbf{31}\\[3pt]
+\textbf{Leading digits dropped + answer marker repeated} \hfill Gold: \textbf{31}\\[3pt]
 \textit{Q: Xiaofang is 8 years old and her mother is 39. How many years younger is Xiaofang than her mother?}\\[3pt]
 \textbf{\TtoT{}}: \quad Reasoning: $39 - 8 = 31$ ~\checkmark \quad$\to$\quad ``The answer is the answer is \textcolor{red}{\textbf{1}}'' ~\ding{55}\\
 \textbf{\TtoM{}}: \quad Reasoning: $39 - 8 = 31$ ~\checkmark \quad$\to$\quad ``The answer is \textcolor{teal}{\textbf{31}}'' ~\checkmark
 }}
 
-\vspace{6pt}
-\noindent\fbox{\parbox{0.96\textwidth}{%
-\textbf{Case 3: Trailing digits dropped + answer marker repeated} \hfill Gold: \textbf{40}\\[3pt]
-\textit{Q: A shop received 20 baskets each of apples and pears. How many baskets of fruit were received in total?}\\[3pt]
-\textbf{\TtoT{}}: \quad Reasoning: $20 + 20 = 40$ ~\checkmark \quad$\to$\quad ``The answer is the answer is the answer is \textcolor{red}{\textbf{4}}'' ~\ding{55}\\
-\textbf{\TtoM{}}: \quad Reasoning: $20 + 20 = 40$ ~\checkmark \quad$\to$\quad ``The answer is \textcolor{teal}{\textbf{40}}'' ~\checkmark
-}}
-
-\caption{Representative CMATH cases illustrating last-mile token corruption. In all three examples, both methods produce correct chain-of-thought reasoning, but \TtoT{} editing generates a corrupted final answer---with extra digits, dropped digits, or repeated answer markers---while \TtoM{} remasking outputs the correct result. The answer marker phrases shown are translated from the Chinese originals for readability.}
+\caption{Representative CMATH case illustrating last-mile token corruption. Both methods produce correct chain-of-thought reasoning, but \TtoT{} editing generates a corrupted final answer---with a dropped leading digit and repeated answer marker---while \TtoM{} remasking outputs the correct result. The answer marker phrase is translated from the Chinese original for readability.}
 \label{fig:case_study}
 \end{figure}
 
