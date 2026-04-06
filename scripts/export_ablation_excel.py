@@ -28,9 +28,11 @@ for d in sorted(os.listdir(base)):
         accuracy = s.get("accuracy", 0)
         correct = s.get("correct", 0)
         total = s.get("total", 100)
+        done = s.get("done", True)
         avg_fwd = s.get("avg_forward_passes", 0)
         avg_output_tokens = s.get("avg_output_tokens", 0)
         time_s = s.get("time_s", 0)
+        editing_threshold = s.get("editing_threshold", "")
 
         if mode == "original":
             tau = ""
@@ -55,6 +57,8 @@ for d in sorted(os.listdir(base)):
             "accuracy_pct": round(accuracy * 100, 1),
             "correct": correct,
             "total": total,
+            "done": done,
+            "editing_threshold": editing_threshold,
             "avg_token_modifications": round(avg_token_mods, 1),
             "modification_type": mod_type,
             "avg_forward_passes": round(avg_fwd, 1),
@@ -68,8 +72,8 @@ ws.title = "Ablation Results (CMATH)"
 
 headers = [
     "Config ID", "Strategy", "τ (threshold)", "C (max cycles)", "ρ (remask ratio)",
-    "Accuracy (%)", "Correct", "Total",
-    "Avg Token Modifications", "Modification Type",
+    "Accuracy (%)", "Correct", "Total", "Done",
+    "τ_edit", "Avg Token Modifications", "Modification Type",
     "Avg Forward Passes", "Avg Output Tokens", "Time (s)"
 ]
 
@@ -102,6 +106,8 @@ for row_idx, r in enumerate(rows, 2):
     values = [
         r["dir"], r["strategy"], r["tau"], r["c_max"], r["rho"],
         r["accuracy_pct"], r["correct"], r["total"],
+        "Yes" if r["done"] else "No",
+        r["editing_threshold"],
         r["avg_token_modifications"], r["modification_type"],
         r["avg_forward_passes"], r["avg_output_tokens"], r["time_s"]
     ]
@@ -114,7 +120,7 @@ for row_idx, r in enumerate(rows, 2):
     if r["accuracy_pct"] == best_acc:
         ws.cell(row=row_idx, column=6).font = best_font
 
-col_widths = [35, 14, 14, 16, 16, 12, 8, 6, 22, 16, 18, 18, 10]
+col_widths = [35, 14, 14, 16, 16, 12, 8, 6, 6, 8, 22, 16, 18, 18, 10]
 for i, w in enumerate(col_widths, 1):
     ws.column_dimensions[get_column_letter(i)].width = w
 

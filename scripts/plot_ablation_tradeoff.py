@@ -109,10 +109,13 @@ legend_elements = [
 ax.legend(handles=legend_elements, loc='upper right', fontsize=8.5,
           framealpha=0.9, edgecolor='gray')
 
-best = max((r for r in records if r["mode"] == "remask"), key=lambda r: r["acc"])
+strategy_label = {"low_prob": "LowProb", "t2t_remask": "T2T-Remask", "logit_diff": "LogitDiff"}
+remasks = [r for r in records if r["mode"] == "remask"]
+
+best = max(remasks, key=lambda r: (r["acc"], -r["token_mods"]))
 ax.annotate(
-    f'Best: LowProb τ={best["tau"]} C={best["c_max"]} ρ={best["rho"]}\n'
-    f'{best["acc"]:.1f}%, {best["token_mods"]:.0f} remasks, {best["avg_fwd"]:.0f} fwd',
+    f'Best: {strategy_label[best["strategy"]]} τ={best["tau"]} C={best["c_max"]} ρ={best["rho"]}\n'
+    f'{best["acc"]:.1f}%, {best["token_mods"]:.1f} remasks, {best["avg_fwd"]:.0f} fwd',
     xy=(best["token_mods"], best["acc"]),
     xytext=(620, 93.5), fontsize=8,
     bbox=dict(boxstyle='round,pad=0.3', facecolor='#FFE0E0', edgecolor='red', alpha=0.9),
@@ -120,11 +123,11 @@ ax.annotate(
     color='red', fontweight='bold'
 )
 
-eff = [r for r in records if r["mode"] == "remask" and r["strategy"] == "low_prob"
-       and r["tau"] == 0.3 and r["c_max"] == 1 and r["rho"] == 0.25][0]
+eff = max((r for r in remasks if r["token_mods"] < 100),
+          key=lambda r: (r["acc"], -r["token_mods"]))
 ax.annotate(
-    f'Most efficient: LowProb τ={eff["tau"]} C={eff["c_max"]} ρ={eff["rho"]}\n'
-    f'{eff["acc"]:.1f}%, {eff["token_mods"]:.0f} remasks, {eff["avg_fwd"]:.0f} fwd',
+    f'Most efficient: {strategy_label[eff["strategy"]]} τ={eff["tau"]} C={eff["c_max"]} ρ={eff["rho"]}\n'
+    f'{eff["acc"]:.1f}%, {eff["token_mods"]:.1f} remasks, {eff["avg_fwd"]:.0f} fwd',
     xy=(eff["token_mods"], eff["acc"]),
     xytext=(280, 93.2), fontsize=8,
     bbox=dict(boxstyle='round,pad=0.3', facecolor='#E0F0FF', edgecolor='blue', alpha=0.9),
@@ -132,11 +135,11 @@ ax.annotate(
     color='blue', fontweight='bold'
 )
 
-cheap = [r for r in records if r["mode"] == "remask" and r["strategy"] == "t2t_remask"
-         and r["tau"] == 0.9 and r["c_max"] == 1 and r["rho"] == 0.25][0]
+orig_acc = orig["acc"]
+cheap = min((r for r in remasks if r["acc"] > orig_acc), key=lambda r: r["token_mods"])
 ax.annotate(
-    f'Cheapest (>86%): T2T-Remask τ={cheap["tau"]}\n'
-    f'{cheap["acc"]:.1f}%, {cheap["token_mods"]:.0f} remasks, {cheap["avg_fwd"]:.0f} fwd',
+    f'Cheapest: {strategy_label[cheap["strategy"]]} τ={cheap["tau"]} C={cheap["c_max"]} ρ={cheap["rho"]}\n'
+    f'{cheap["acc"]:.1f}%, {cheap["token_mods"]:.1f} remasks, {cheap["avg_fwd"]:.0f} fwd',
     xy=(cheap["token_mods"], cheap["acc"]),
     xytext=(280, 84.8), fontsize=8,
     bbox=dict(boxstyle='round,pad=0.3', facecolor='#FFE8D0', edgecolor='orangered', alpha=0.9),
@@ -157,7 +160,7 @@ ax.annotate(
 all_out_tok = [r["avg_output_tokens"] for r in records]
 mean_out_tok = np.mean(all_out_tok)
 ax.axvline(x=mean_out_tok, color='magenta', linestyle=':', linewidth=1, alpha=0.6)
-ax.text(mean_out_tok + 5, 79.5, f'avg output tokens = {mean_out_tok:.0f}',
+ax.text(mean_out_tok + 5, 80.5, f'avg output tokens = {mean_out_tok:.0f}',
         color='magenta', fontsize=8, alpha=0.8)
 
 ax.set_xlabel('Average Token Modifications per Sample (T2T edits / T2M remasks)',
@@ -172,7 +175,8 @@ ax.yaxis.set_major_locator(plt.MultipleLocator(2))
 ax.grid(True, alpha=0.3, linestyle='--')
 
 plt.tight_layout()
-out = "paper/figures/ablation_tradeoff.png"
-plt.savefig(out, dpi=150, bbox_inches='tight')
-print(f"Saved to {out}")
+for ext in ("pdf", "png"):
+    out = f"paper/figures/ablation_tradeoff.{ext}"
+    plt.savefig(out, dpi=150, bbox_inches='tight')
+    print(f"Saved to {out}")
 plt.close()

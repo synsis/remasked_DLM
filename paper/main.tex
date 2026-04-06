@@ -432,24 +432,24 @@ The M2T fill threshold $\tau_{\text{m2t}}{=}0.7$ is shared by all configurations
 \end{enumerate}
 The baseline uses the original T2T editing with $\tau_{\text{t2t}}{=}0.5$ (no remasking), with all inference parameters aligned with the official LLaDA2.1-mini Q~Mode defaults~\citep{nie2026llada21}. This yields $1 + (5{+}3{+}4) \times 3 \times 3 = 109$ configurations, all evaluated on the same 100 samples.
 
-Figure~\ref{fig:ablation} plots each configuration as a point. The $x$-axis measures average token modifications per sample---T2T edits for the baseline (${\star}$, 12.4 edits/sample), remask count for \TtoM{} strategies. The $y$-axis measures accuracy.
+Figure~\ref{fig:ablation} plots each configuration as a point. The $x$-axis measures average token modifications per sample---T2T edits for the baseline (${\star}$, $\tau_{\text{t2t}}{=}0.5$, 12.4 edits/sample), remask count for \TtoM{} strategies. The $y$-axis measures accuracy.
 
 \begin{figure}[t]
     \centering
     \includegraphics[width=\textwidth]{figures/ablation_tradeoff.pdf}
-    \caption{\textbf{Token modification cost vs.\ accuracy.} Each point is one (strategy, $\tau$, $C_{\max}$, $\rho_{\max}$) configuration on CMATH (100 samples). The $x$-axis measures average token modifications per sample: T2T edits for the baseline, remasks for \TtoM{} strategies. Color shade encodes $\tau$ (lighter = smaller). The vertical dotted line marks the average output length (${\sim}333$ tokens). All \TtoM{} strategies surpass the T2T baseline (81\%, ${\star}$). \textbf{Best accuracy}: \textsc{LowProb} $\tau{=}0.7$, $C{=}3$, $\rho{=}1.0$ (95\%, 524 remasks). \textbf{Most efficient}: \textsc{LowProb} $\tau{=}0.3$, $C{=}1$, $\rho{=}0.25$ (93\%, only 69 remasks). \textbf{Cheapest} ($>$86\%): \textsc{T2T-Remask} $\tau{=}0.9$ (87\%, 2 remasks).}
+    \caption{\textbf{Token modification cost vs.\ accuracy.} Each point is one (strategy, $\tau$, $C_{\max}$, $\rho_{\max}$) configuration on CMATH (100 samples). The $x$-axis measures average token modifications per sample: T2T edits for the baseline, remasks for \TtoM{} strategies. Color shade encodes $\tau$ (lighter = smaller). The vertical dotted line marks the average output length (${\sim}334$ tokens). All \TtoM{} strategies surpass the T2T baseline (81\%, ${\star}$). \textbf{Best accuracy}: \textsc{LowProb} $\tau{=}0.7$, $C{=}3$, $\rho{=}1.0$ (95\%, 523.8 remasks). \textbf{Most efficient}: \textsc{LowProb} $\tau{=}0.3$, $C{=}1$, $\rho{=}0.25$ (93\%, only 69.2 remasks). \textbf{Cheapest}: \textsc{T2T-Remask} $\tau{=}0.9$, $C{=}1$, $\rho{=}0.5$ (87\%, 1.7 remasks).}
     \label{fig:ablation}
 \end{figure}
 
 Several trends emerge:
 \begin{itemize}[nosep,leftmargin=*]
     \item \textbf{All strategies improve over T2T.} Every \TtoM{} configuration exceeds the T2T baseline (81\%, 12.4 edits), confirming that remasking is strictly preferable to token replacement regardless of hyperparameter choice.
-    \item \textbf{\textsc{LowProb} dominates.} Across all cost levels, \textsc{LowProb} achieves the highest accuracy. At low cost, $\tau{=}0.3$ reaches 93\% with only 69 remasks; at higher cost, $\tau{=}0.7$ reaches 95\%.
-    \item \textbf{\textsc{T2T-Remask} is cheapest.} With $\tau{=}0.9$, it triggers only ${\sim}2$ remasks per sample (comparable to T2T's 12 edits) yet improves accuracy to 87\% (+6\%).
+    \item \textbf{\textsc{LowProb} dominates.} Across all cost levels, \textsc{LowProb} achieves the highest accuracy. At low cost, $\tau{=}0.3$, $C{=}1$, $\rho{=}0.25$ reaches 93\% with only 69.2 remasks; at higher cost, $\tau{=}0.7$, $C{=}3$, $\rho{=}1.0$ reaches 95\% with 523.8 remasks.
+    \item \textbf{\textsc{T2T-Remask} is cheapest.} With $\tau{=}0.9$, $C{=}1$, $\rho{=}0.5$, it triggers only 1.7 remasks per sample yet improves accuracy to 87\% (+6\%).
     \item \textbf{Over-remasking hurts.} Large $\tau$ (e.g., 0.9 for \textsc{LowProb}) combined with large $C_{\max}$ and $\rho_{\max}$ produces $>$1000 remasks per sample, degrading accuracy below 88\%. The safety mechanisms ($C_{\max}$, $\rho_{\max}$) are essential for preventing this.
 \end{itemize}
 
-\noindent Overall, the most cost-efficient configuration (\textsc{LowProb} $\tau{=}0.3$, $C{=}1$, $\rho{=}0.25$) adds only ${\sim}69$ remasks per sample---modest relative to the average output length of ${\sim}333$ tokens---while achieving a 12-point accuracy gain over \TtoT{}.
+\noindent Overall, the most cost-efficient configuration (\textsc{LowProb} $\tau{=}0.3$, $C{=}1$, $\rho{=}0.25$) adds only 69.2 remasks per sample---modest relative to the average output length of ${\sim}334$ tokens---while achieving a 12-point accuracy gain over \TtoT{}.
 
 \subsection{Analysis}
 \label{sec:analysis}
