@@ -53,7 +53,7 @@
 \maketitle
 
 \begin{abstract}
-Discrete masked diffusion language models such as LLaDA generate text through iterative denoising, where mask tokens are progressively replaced with predicted tokens. LLaDA2.1 introduced a Token-to-Token (T2T) editing mechanism that accelerates generation by directly replacing committed tokens suspected of being incorrect. However, we identify fundamental limitations of T2T editing: it couples error detection with replacement, pollutes the generation context with potentially incorrect tokens, and introduces a train--inference noise mismatch where systematic model-generated errors differ from the random perturbations seen during training. We propose \emph{Token-to-Mask} (T2M) remasking, a training-free, drop-in replacement for T2T editing that resets suspected erroneous tokens back to the mask state, allowing the diffusion process to re-predict them under cleaner context. We design and empirically validate three complementary error detection strategies---probability-based, trigger-mirrored, and temporal-difference-based---and provide a unified theoretical analysis showing that T2M remasking purifies the generation context, converts systematic inference errors back to the model's native mask noise type, and enables delayed commitment for joint multi-position optimization. Comprehensive experiments across 12 benchmarks spanning knowledge, reasoning, mathematics, coding, and instruction following show that T2M consistently improves performance on tasks requiring precise token-level output, with the largest gain on mathematics (+5.92\% on CMATH). Error analysis on CMATH reveals that the dominant failure mode is \emph{last-mile token corruption}---where correct reasoning produces a corrupted final answer---and that T2M repairs 67.8\% of such cases.
+Discrete masked diffusion language models such as LLaDA generate text through iterative denoising, where mask tokens are progressively replaced with predicted tokens. LLaDA2.1 introduced a Token-to-Token (T2T) editing mechanism that accelerates generation by directly replacing committed tokens suspected of being incorrect. However, we identify fundamental limitations of T2T editing: it couples error detection with replacement, pollutes the generation context with potentially incorrect tokens, and introduces a train--inference noise mismatch where systematic model-generated errors differ from the random perturbations seen during training. We propose \emph{Token-to-Mask} (T2M) remasking, a training-free, drop-in replacement for T2T editing that resets suspected erroneous tokens back to the mask state, allowing the diffusion process to re-predict them under cleaner context. We design and empirically validate three complementary error detection strategies---probability-based, trigger-mirrored, and temporal-difference-based---and provide a unified theoretical analysis showing that T2M remasking purifies the generation context, converts systematic inference errors back to the model's native mask noise type, and enables delayed commitment for joint multi-position optimization. Comprehensive experiments across 12 benchmarks spanning knowledge, reasoning, mathematics, coding, and instruction following show that T2M generally improves performance on tasks requiring precise token-level output, with the largest gain on mathematics (+5.92\% on CMATH). Error analysis on CMATH reveals that the dominant failure mode is \emph{last-mile token corruption}---where correct reasoning produces a corrupted final answer---and that T2M repairs 59.4\% of such cases.
 \end{abstract}
 
 %=============================================================================
@@ -97,8 +97,8 @@ Our contributions are:
     \item We identify fundamental limitations of \TtoT{} editing in LLaDA2.1 and propose \TtoM{} remasking as a principled, training-free replacement.
     \item We design and empirically validate three error detection strategies on a small-scale pilot set, and analyze their complementary strengths.
     \item We provide a unified theoretical framework explaining why mask tokens are strictly preferable to erroneous tokens as context, from the perspectives of train--inference noise mismatch, context signal hierarchy, and delayed commitment.
-    \item We discover that \emph{last-mile token corruption}---where the model's reasoning is correct but the final answer is corrupted during denoising---is the dominant error mode (73.7\% of errors on CMATH), and show that \TtoM{} specifically repairs this failure mode.
-    \item We conduct comprehensive experiments across 12 benchmarks, showing consistent improvements on tasks requiring precise token-level output, with the largest gain on mathematics.
+    \item We discover that \emph{last-mile token corruption}---where the model's reasoning is correct but the final answer is corrupted during denoising---is the dominant error mode (79.9\% of errors on CMATH), and show that \TtoM{} specifically repairs this failure mode.
+    \item We conduct comprehensive experiments across 12 benchmarks, showing general improvements on tasks requiring precise token-level output, with the largest gain on mathematics.
 \end{itemize}
 
 
@@ -373,35 +373,35 @@ Our approach offers principled advantages over existing remasking methods along 
 
 \begin{table}[t]
 \centering
-\caption{Main results across 12 benchmarks. All methods use LLaDA2.1-mini with identical inference parameters. T2M~Eff.\ uses \textsc{LowProb} ($\tau{=}0.3$, $C_{\max}{=}1$, $\rho_{\max}{=}0.25$); T2M~Best uses \textsc{LowProb} ($\tau{=}0.7$, $C_{\max}{=}3$, $\rho_{\max}{=}1.0$). TriviaQA and DROP report F1; others report accuracy or pass@1 (\%). Best per-benchmark in \textbf{bold}. ``--'' indicates evaluation in progress or not applicable.}
+\caption{Main results across 12 benchmarks. All methods use LLaDA2.1-mini with identical inference parameters. T2M uses \textsc{LowProb} ($\tau{=}0.3$, $C_{\max}{=}1$, $\rho_{\max}{=}0.25$). TriviaQA and DROP report F1; others report accuracy or pass@1 (\%). Best per-benchmark in \textbf{bold}.}
 \label{tab:main}
 \vspace{4pt}
 \small
-\begin{tabular}{llcccc}
+\begin{tabular}{llcc}
 \toprule
-\textbf{Category} & \textbf{Benchmark} & \textbf{Original (T2T)} & \textbf{T2M (Eff.)} & \textbf{T2M (Best)} \\
+\textbf{Category} & \textbf{Benchmark} & \textbf{Original (T2T)} & \textbf{T2M} \\
 \midrule
 \multirow{3}{*}{Knowledge}
-  & GPQA-Diamond   & 21.72          & 21.72          & -- \\
-  & TriviaQA (F1)  & 30.54          & \textbf{30.96} & -- \\
-  & MMLU-Pro       & 58.78          & \textbf{58.84} & -- \\
+  & GPQA-Diamond   & \textbf{21.72} & \textbf{21.72} \\
+  & TriviaQA (F1)  & 30.54          & \textbf{30.96} \\
+  & MMLU-Pro       & 58.78          & \textbf{58.84} \\
 \midrule
 \multirow{4}{*}{Reasoning}
-  & HellaSwag      & 78.57          & \textbf{78.67} & -- \\
-  & PIQA           & \textbf{82.37} & 81.94          & 82.3 \\
-  & DROP (F1)      & 38.53          & \textbf{38.90} & -- \\
-  & BBH            & \textbf{75.50} & 75.38          & -- \\
+  & HellaSwag      & 78.57          & \textbf{78.67} \\
+  & PIQA           & \textbf{82.37} & 81.94          \\
+  & DROP (F1)      & 38.53          & \textbf{38.90} \\
+  & BBH            & \textbf{75.50} & 75.38          \\
 \midrule
 \multirow{3}{*}{Math}
-  & CMATH          & 82.33          & \textbf{88.25} & -- \\
-  & AIME 2025      & 33.33          & 33.33          & -- \\
-  & GSM Plus       & \textbf{67.54} & 67.21          & 67.9 \\
+  & CMATH          & 82.33          & \textbf{88.25} \\
+  & AIME 2025      & \textbf{33.33} & \textbf{33.33} \\
+  & GSM Plus       & \textbf{67.54} & 67.21          \\
 \midrule
 Coding
-  & HumanEval+     & \textbf{64.0} & 61.0          & 61.6 \\
+  & HumanEval+     & \textbf{64.00} & 61.00          \\
 \midrule
 Instruction
-  & IFEval (Strict) & 73.0         & \textbf{74.1} & -- \\
+  & IFEval (Strict) & 73.01         & \textbf{74.12} \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -442,14 +442,14 @@ Figure~\ref{fig:ablation} plots each configuration as a point. The $x$-axis meas
 \begin{figure}[htp]
     \centering
     \includegraphics[width=\textwidth]{figures/ablation_tradeoff.pdf}
-    \caption{\textbf{Token modification cost vs.\ accuracy.} Each point is one (strategy, $\tau$, $C_{\max}$, $\rho_{\max}$) configuration on CMATH (100 samples). The $x$-axis measures average token modifications per sample: T2T edits for the baseline, remasks for \TtoM{} strategies. Color shade encodes $\tau$ (lighter = smaller). The vertical dotted line marks the average output length (${\sim}334$ tokens). All \TtoM{} strategies surpass the T2T baseline (81\%, ${\star}$). \textbf{Best accuracy}: \textsc{LowProb} $\tau{=}0.7$, $C{=}3$, $\rho{=}1.0$ (95\%, 523.8 remasks). \textbf{Most efficient}: \textsc{LowProb} $\tau{=}0.3$, $C{=}1$, $\rho{=}0.25$ (93\%, only 69.2 remasks). \textbf{Cheapest}: \textsc{T2T-Remask} $\tau{=}0.9$, $C{=}1$, $\rho{=}0.5$ (87\%, 1.7 remasks).}
+    \caption{\textbf{Token modification cost vs.\ accuracy.} Each point is one (strategy, $\tau$, $C_{\max}$, $\rho_{\max}$) configuration on CMATH (100 samples). The $x$-axis measures average token modifications per sample: T2T edits for the baseline, remasks for \TtoM{} strategies. Color shade encodes $\tau$ (lighter = smaller). The vertical dotted line marks the average output length (${\sim}334$ tokens). All \TtoM{} strategies surpass the T2T baseline (81\%, ${\star}$). \textbf{Most efficient}: \textsc{LowProb} $\tau{=}0.3$, $C{=}1$, $\rho{=}0.25$ (93\%, only 69.2 remasks). \textbf{Cheapest}: \textsc{T2T-Remask} $\tau{=}0.9$, $C{=}1$, $\rho{=}0.5$ (87\%, 1.7 remasks).}
     \label{fig:ablation}
 \end{figure}
 
 Several trends emerge:
 \begin{itemize}[nosep,leftmargin=*]
-    \item \textbf{All strategies improve over T2T.} Every \TtoM{} configuration exceeds the T2T baseline (81\%, 12.4 edits), confirming that remasking is strictly preferable to token replacement regardless of hyperparameter choice.
-    \item \textbf{\textsc{LowProb} dominates.} Across all cost levels, \textsc{LowProb} achieves the highest accuracy. At low cost, $\tau{=}0.3$, $C{=}1$, $\rho{=}0.25$ reaches 93\% with only 69.2 remasks; at higher cost, $\tau{=}0.7$, $C{=}3$, $\rho{=}1.0$ reaches 95\% with 523.8 remasks.
+    \item \textbf{All strategies improve over T2T.} Every \TtoM{} configuration exceeds the T2T baseline (81\%, 12.4 edits), confirming that on CMATH, remasking is preferable to token replacement across all tested hyperparameter configurations.
+    \item \textbf{\textsc{LowProb} dominates.} Across all cost levels, \textsc{LowProb} achieves the highest accuracy. The most cost-efficient configuration ($\tau{=}0.3$, $C{=}1$, $\rho{=}0.25$) reaches 93\% with only 69.2 remasks.
     \item \textbf{\textsc{T2T-Remask} is cheapest.} With $\tau{=}0.9$, $C{=}1$, $\rho{=}0.5$, it triggers only 1.7 remasks per sample yet improves accuracy to 87\% (+6\%).
     \item \textbf{Over-remasking hurts.} Large $\tau$ (e.g., 0.9 for \textsc{LowProb}) combined with large $C_{\max}$ and $\rho_{\max}$ produces $>$1000 remasks per sample, degrading accuracy below 88\%. The safety mechanisms ($C_{\max}$, $\rho_{\max}$) are essential for preventing this.
 \end{itemize}
@@ -460,9 +460,9 @@ Several trends emerge:
 \label{sec:analysis}
 
 \paragraph{Last-mile token corruption: the dominant error mode.}
-We conduct a systematic error analysis on CMATH (1,098 elementary math problems), where \TtoM{} achieves the largest gain ($+5.9\%$). Among the 194 errors made by \TtoT{}, \textbf{143 (73.7\%)} are \emph{last-mile token corruption}: the model's chain-of-thought reasoning arrives at the correct answer, yet the final extracted answer is corrupted during denoising. Only 51 errors (26.3\%) are genuine reasoning failures. Corruption takes several characteristic forms: \textbf{extra digits appended} ($18 \to 188$, 44 cases), \textbf{digits dropped} ($32 \to 2$, 26 cases), \textbf{answer marker repetition} (25 cases), and \textbf{single-digit substitution} (14 cases).
+We conduct a systematic error analysis on CMATH (1,098 elementary math problems), where \TtoM{} achieves the largest gain ($+5.9\%$). Among the 194 errors made by \TtoT{}, \textbf{155 (79.9\%)} are \emph{last-mile token corruption}: the model's chain-of-thought reasoning arrives at the correct answer, yet the final extracted answer is corrupted during denoising. Only 39 errors (20.1\%) are genuine reasoning failures. Corruption takes several characteristic forms: \textbf{extra digits appended} ($18 \to 188$, 44 cases), \textbf{digits dropped} ($32 \to 2$, 26 cases), \textbf{answer marker repetition} (25 cases), and \textbf{single-digit substitution} (14 cases).
 
-\TtoM{} remasking repairs \textbf{97 of 143} corruption cases (67.8\%), reducing total corruption errors from 143 to 76 ($\downarrow$46.9\%), while genuine reasoning errors remain virtually unchanged (51$\to$53). Table~\ref{tab:corruption} provides the full breakdown; representative examples are shown in Figure~\ref{fig:case_study} (Appendix~\ref{app:cases}).
+\TtoM{} remasking repairs \textbf{92 of 155} corruption cases (59.4\%), reducing total corruption errors from 155 to 91 ($\downarrow$41.3\%), while genuine reasoning errors remain virtually unchanged (39$\to$38). Table~\ref{tab:corruption} provides the full breakdown; representative examples are shown in Figure~\ref{fig:case_study} (Appendix~\ref{app:cases}).
 
 \begin{table}[t]
 \centering
@@ -474,17 +474,17 @@ We conduct a systematic error analysis on CMATH (1,098 elementary math problems)
 \toprule
 & \textbf{Total Errors} & \textbf{Corruption} & \textbf{Genuine Reasoning} & \textbf{Accuracy} \\
 \midrule
-\TtoT{} editing   & 194  & 143 ~(73.7\%)  & 51 ~(26.3\%)  & 82.3\% \\
-\TtoM{} remasking  & 129  & ~76 ~(58.9\%)  & 53 ~(41.1\%)  & 88.3\% \\
+\TtoT{} editing   & 194  & 155 ~(79.9\%)  & 39 ~(20.1\%)  & 82.3\% \\
+\TtoM{} remasking  & 129  & ~91 ~(70.5\%)  & 38 ~(29.5\%)  & 88.3\% \\
 \midrule
-$\Delta$           & $-65$ & $-67$ ~($\downarrow$46.9\%) & $+2$ & $+5.9\%$ \\
+$\Delta$           & $-65$ & $-64$ ~($\downarrow$41.3\%) & $-1$ & $+5.9\%$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Among the 108 samples that \TtoM{} flipped from incorrect to correct, 97 (89.8\%) are corruption fixes and only 11 (10.2\%) reflect improved reasoning. Conversely, \TtoM{} introduces 43 new errors, of which 30 are new corruption cases---indicating that remasking occasionally destabilizes the denoising process at the answer boundary, though far less often than it helps.
+Among the 104 samples that \TtoM{} flipped from incorrect to correct, 92 (88.5\%) are corruption fixes and only 12 (11.5\%) reflect improved reasoning. Conversely, \TtoM{} introduces 39 new errors: 30 are new corruption cases, indicating that remasking occasionally destabilizes the denoising process at the answer boundary, and 9 are new reasoning errors where remasking alters the generation path---though both failure modes occur far less often than improvements.
 
-The step-by-step token denoising trajectories for representative examples (DROP 160 and DROP 75) are provided in Figure~\ref{fig:trajectory} (Appendix~\ref{app:trajectory}), showing per-token probabilities at each denoising iteration for both \TtoT{} and \TtoM{}.
+The step-by-step token denoising trajectory for a representative example (DROP 160, gold = 857) is provided in Figure~\ref{fig:trajectory} (Appendix~\ref{app:trajectory}), showing per-token probabilities at each denoising iteration for both \TtoT{} and \TtoM{}.
 
 %=============================================================================
 \section{Conclusion}
@@ -493,7 +493,7 @@ The step-by-step token denoising trajectories for representative examples (DROP 
 
 We have identified fundamental limitations of Token-to-Token (\TtoT{}) editing in LLaDA2.1 and proposed Token-to-Mask (\TtoM{}) remasking as a principled, training-free replacement. By resetting suspected erroneous tokens to the mask state instead of replacing them with potentially incorrect alternatives, \TtoM{} purifies the generation context, converts systematic inference errors back to the model's native \mask{} noise type, and enables joint multi-position re-optimization through delayed commitment.
 
-Our theoretical analysis provides a unified understanding of why mask tokens are strictly preferable to erroneous tokens as context, drawing parallels between the discrete and continuous diffusion settings. Three complementary error detection strategies---\textsc{LowProb}, \textsc{T2T-Remask}, and \textsc{LogitDiff}---offer flexibility in detecting different types of token-level errors. Experiments across 12 benchmarks show consistent improvements on tasks requiring precise token-level output, with the largest gain on mathematics; our error analysis reveals that last-mile token corruption accounts for 73.7\% of errors on CMATH, with \TtoM{} repairing 67.8\% of such corruptions.
+Our theoretical analysis provides a unified understanding of why mask tokens are strictly preferable to erroneous tokens as context, drawing parallels between the discrete and continuous diffusion settings. Three complementary error detection strategies---\textsc{LowProb}, \textsc{T2T-Remask}, and \textsc{LogitDiff}---offer flexibility in detecting different types of token-level errors. Experiments across 12 benchmarks show general improvements on tasks requiring precise token-level output, with the largest gain on mathematics; our error analysis reveals that last-mile token corruption accounts for 79.9\% of errors on CMATH, with \TtoM{} repairing 59.4\% of such corruptions.
 
 \paragraph{Limitations.} Our approach is specific to the \TtoT{} editing mechanism in LLaDA2.1 and may not directly apply to dLLMs without such a mechanism. The theoretical analysis relies on the assumption that mask context is always preferable to erroneous context, which may not hold when error rates are very low. The safety mechanisms introduce hyperparameters ($C_{\max}$, $\rho_{\max}$) that may require task-specific tuning.
 
