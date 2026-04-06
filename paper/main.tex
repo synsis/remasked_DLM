@@ -53,7 +53,7 @@
 \maketitle
 
 \begin{abstract}
-Discrete masked diffusion language models such as LLaDA generate text through iterative denoising, where mask tokens are progressively replaced with predicted tokens. LLaDA2.1 introduced a Token-to-Token (T2T) editing mechanism that accelerates generation by directly replacing committed tokens suspected of being incorrect. However, we identify fundamental limitations of T2T editing: it couples error detection with replacement, pollutes the generation context with potentially incorrect tokens, and introduces a train--inference noise mismatch where systematic model-generated errors differ from the random perturbations seen during training. We propose \emph{Token-to-Mask} (T2M) remasking, a training-free, drop-in replacement for T2T editing that resets suspected erroneous tokens back to the mask state, allowing the diffusion process to re-predict them under cleaner context. We design and empirically validate three complementary error detection strategies---probability-based, trigger-mirrored, and temporal-difference-based---and provide a unified theoretical analysis showing that T2M remasking purifies the generation context, converts systematic inference errors back to the model's native mask noise type, and enables delayed commitment for joint multi-position optimization. Comprehensive experiments across 12 benchmarks spanning knowledge, reasoning, mathematics, coding, and instruction following show that T2M consistently improves performance on tasks requiring precise token-level output, with the largest gain on mathematics (+5.9\% on CMATH). Error analysis on CMATH reveals that the dominant failure mode is \emph{last-mile token corruption}---where correct reasoning produces a corrupted final answer---and that T2M repairs 67.8\% of such cases.
+Discrete masked diffusion language models such as LLaDA generate text through iterative denoising, where mask tokens are progressively replaced with predicted tokens. LLaDA2.1 introduced a Token-to-Token (T2T) editing mechanism that accelerates generation by directly replacing committed tokens suspected of being incorrect. However, we identify fundamental limitations of T2T editing: it couples error detection with replacement, pollutes the generation context with potentially incorrect tokens, and introduces a train--inference noise mismatch where systematic model-generated errors differ from the random perturbations seen during training. We propose \emph{Token-to-Mask} (T2M) remasking, a training-free, drop-in replacement for T2T editing that resets suspected erroneous tokens back to the mask state, allowing the diffusion process to re-predict them under cleaner context. We design and empirically validate three complementary error detection strategies---probability-based, trigger-mirrored, and temporal-difference-based---and provide a unified theoretical analysis showing that T2M remasking purifies the generation context, converts systematic inference errors back to the model's native mask noise type, and enables delayed commitment for joint multi-position optimization. Comprehensive experiments across 12 benchmarks spanning knowledge, reasoning, mathematics, coding, and instruction following show that T2M consistently improves performance on tasks requiring precise token-level output, with the largest gain on mathematics (+5.92\% on CMATH). Error analysis on CMATH reveals that the dominant failure mode is \emph{last-mile token corruption}---where correct reasoning produces a corrupted final answer---and that T2M repairs 67.8\% of such cases.
 \end{abstract}
 
 %=============================================================================
@@ -373,40 +373,40 @@ Our approach offers principled advantages over existing remasking methods along 
 
 \begin{table}[t]
 \centering
-\caption{Main results across 12 benchmarks. All methods use LLaDA2.1-mini with identical inference parameters; \TtoM{} uses the \textsc{LowProb} strategy ($\tau{=}0.3$, $C_{\max}{=}1$, $\rho_{\max}{=}0.25$). TriviaQA and DROP report F1; others report accuracy or pass@1 (\%). Best per-benchmark in \textbf{bold}. ``--'' indicates evaluation in progress.}
+\caption{Main results across 12 benchmarks. All methods use LLaDA2.1-mini with identical inference parameters. T2M~Eff.\ uses \textsc{LowProb} ($\tau{=}0.3$, $C_{\max}{=}1$, $\rho_{\max}{=}0.25$); T2M~Best uses \textsc{LowProb} ($\tau{=}0.7$, $C_{\max}{=}3$, $\rho_{\max}{=}1.0$). TriviaQA and DROP report F1; others report accuracy or pass@1 (\%). Best per-benchmark in \textbf{bold}. ``--'' indicates evaluation in progress or not applicable.}
 \label{tab:main}
 \vspace{4pt}
 \small
-\begin{tabular}{llccc}
+\begin{tabular}{llcccc}
 \toprule
-\textbf{Category} & \textbf{Benchmark} & \textbf{Original (T2T)} & \textbf{T2M (LowProb)} & $\boldsymbol{\Delta}$ \\
+\textbf{Category} & \textbf{Benchmark} & \textbf{Original (T2T)} & \textbf{T2M (Eff.)} & \textbf{T2M (Best)} \\
 \midrule
 \multirow{3}{*}{Knowledge}
-  & GPQA-Diamond   & 21.7          & 21.7          & $\pm 0.0$ \\
-  & TriviaQA (F1)  & 30.5          & \textbf{31.0} & \good{+0.4} \\
-  & MMLU-Pro       & --            & --            & -- \\
+  & GPQA-Diamond   & 21.72          & 21.72          & -- \\
+  & TriviaQA (F1)  & 30.54          & \textbf{30.96} & -- \\
+  & MMLU-Pro       & 58.78          & \textbf{58.84} & -- \\
 \midrule
 \multirow{4}{*}{Reasoning}
-  & HellaSwag      & 78.6          & \textbf{78.7} & \good{+0.1} \\
-  & PIQA           & \textbf{82.4} & 81.9          & $-0.4$ \\
-  & DROP (F1)      & 38.5          & \textbf{38.9} & \good{+0.4} \\
-  & BBH            & --            & --            & -- \\
+  & HellaSwag      & 78.57          & \textbf{78.67} & -- \\
+  & PIQA           & \textbf{82.37} & 81.94          & 82.3 \\
+  & DROP (F1)      & 38.53          & \textbf{38.90} & -- \\
+  & BBH            & \textbf{75.50} & 75.38          & -- \\
 \midrule
 \multirow{3}{*}{Math}
-  & CMATH          & 82.3          & \textbf{88.3} & \good{+5.9} \\
-  & AIME 2025      & 33.3          & 33.3          & $\pm 0.0$ \\
-  & GSM Plus       & \textbf{67.5} & 67.2          & $-0.3$ \\
+  & CMATH          & 82.33          & \textbf{88.25} & -- \\
+  & AIME 2025      & 33.33          & 33.33          & -- \\
+  & GSM Plus       & \textbf{67.54} & 67.21          & 67.9 \\
 \midrule
 Coding
-  & HumanEval+     & \textbf{64.0} & 61.0          & $-3.0$ \\
+  & HumanEval+     & \textbf{64.0} & 61.0          & 61.6 \\
 \midrule
 Instruction
-  & IFEval (Strict) & 73.0         & \textbf{74.1} & \good{+1.1} \\
+  & IFEval (Strict) & 73.0         & \textbf{74.1} & -- \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Table~\ref{tab:main} presents the main results. \TtoM{} remasking yields the largest gain on \textbf{CMATH} ($+5.9$), a Chinese elementary math benchmark where final answers are exact numbers and even a single corrupted digit causes failure. Notable improvement is also observed on \textbf{instruction following} (IFEval $+1.1$), where precise format compliance benefits from cleaner context. Modest gains appear on \textbf{extractive QA} (TriviaQA $+0.4$ F1, DROP $+0.4$ F1), where answers are short spans requiring precise token-level reproduction. On \textbf{knowledge} (GPQA $\pm 0.0$), other \textbf{mathematics} benchmarks (AIME~2025 $\pm 0.0$ with only 30 problems, GSM~Plus $-0.3$), and \textbf{commonsense reasoning} (HellaSwag $+0.1$, PIQA $-0.4$), performance is essentially unchanged. On \textbf{coding} (HumanEval+ $-3.0$), performance decreases, likely because remasking disrupts the syntactic token dependencies that code generation relies on---correct code tokens may appear low-confidence in isolation yet be essential for structural validity. We analyze these task-dependent patterns in Section~\ref{sec:analysis}.
+Table~\ref{tab:main} presents the main results. \TtoM{} remasking yields the largest gain on \textbf{CMATH} ($+5.92$), a Chinese elementary math benchmark where final answers are exact numbers and even a single corrupted digit causes failure. Notable improvement is also observed on \textbf{instruction following} (IFEval $+1.1$), where precise format compliance benefits from cleaner context. Modest gains appear on \textbf{extractive QA} (TriviaQA $+0.42$ F1, DROP $+0.37$ F1), where answers are short spans requiring precise token-level reproduction. On \textbf{knowledge} (GPQA $\pm 0.00$, MMLU-Pro $+0.06$), other \textbf{mathematics} benchmarks (AIME~2025 $\pm 0.00$ with only 30 problems, GSM~Plus $-0.33$), and \textbf{commonsense/structured reasoning} (HellaSwag $+0.10$, PIQA $-0.43$, BBH $-0.12$), performance is essentially unchanged. On \textbf{coding} (HumanEval+ $-3.0$), performance decreases, likely because remasking disrupts the syntactic token dependencies that code generation relies on---correct code tokens may appear low-confidence in isolation yet be essential for structural validity. We analyze these task-dependent patterns in Section~\ref{sec:analysis}.
 
 \subsection{Ablation Studies}
 
@@ -591,6 +591,6 @@ Figure~\ref{fig:trajectory} shows the full token-level denoising trajectory for 
 
 %=============================================================================
 \newpage
-\input{checklist}
+% \input{checklist}
 
 \end{document}

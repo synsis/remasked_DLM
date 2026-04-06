@@ -33,19 +33,35 @@ def bbh_correct(resp, target):
     return tn in rn or rn == tn
 
 
+BBH_CONFIGS = [
+    "boolean_expressions", "causal_judgement", "date_understanding",
+    "disambiguation_qa", "dyck_languages", "formal_fallacies",
+    "geometric_shapes", "hyperbaton", "logical_deduction_five_objects",
+    "logical_deduction_seven_objects", "logical_deduction_three_objects",
+    "movie_recommendation", "multistep_arithmetic_two", "navigate",
+    "object_counting", "penguins_in_a_table",
+    "reasoning_about_colored_objects", "ruin_names",
+    "salient_translation_error_detection", "snarks", "sports_understanding",
+    "temporal_sequences", "tracking_shuffled_objects_five_objects",
+    "tracking_shuffled_objects_seven_objects",
+    "tracking_shuffled_objects_three_objects", "web_of_lies", "word_sorting",
+]
+
+
 def load_bbh():
-    try:
-        configs = get_dataset_config_names("lukaemon/bbh")
-        parts = [load_dataset("lukaemon/bbh", c, split="test") for c in configs]
-        return concatenate_datasets(parts)
-    except Exception as e1:
+    errors = []
+    for repo in ["lukaemon/bbh", "maveriq/bigbenchhard"]:
         try:
-            return load_dataset("maveriq/bigbenchhard", split="train",
-                                trust_remote_code=True)
-        except Exception as e2:
-            raise RuntimeError(
-                f"BBH load failed (lukaemon/bbh: {e1}; maveriq/bigbenchhard: {e2})"
-            ) from e2
+            configs = get_dataset_config_names(repo)
+        except Exception:
+            configs = BBH_CONFIGS
+        split = "test" if "lukaemon" in repo else "train"
+        try:
+            parts = [load_dataset(repo, c, split=split) for c in configs]
+            return concatenate_datasets(parts)
+        except Exception as e:
+            errors.append(f"{repo}: {e}")
+    raise RuntimeError(f"BBH load failed: " + "; ".join(errors))
 
 
 def run_tag(args):
