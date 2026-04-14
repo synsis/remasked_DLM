@@ -1494,7 +1494,7 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
         eos_id: int = 156892,
         mask_id: int = 156895,
         num_to_transfer: int = 1,
-        prefill_mode: str = "max",
+        prefill_mode: str = "min",
     ) -> List[torch.Tensor]:
         """Batched generation with KV prefix caching.
 

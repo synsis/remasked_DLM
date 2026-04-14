@@ -13,11 +13,10 @@ from remask.utils import extract_math_answer, normalize_numeric
 from eval.common import add_parallel_args, run_eval
 
 AIME_PROMPT = (
-    "Solve the following math problem step by step. The last line of your "
-    "response should be of the form Answer: $ANSWER (without quotes) where "
-    "$ANSWER is the answer to the problem.\n\n"
+    "Solve the following math problem step by step. "
+    "Put your answer inside \\boxed{{}}.\n\n"
     "{problem}\n\n"
-    "Remember to put your answer on its own line after \"Answer:\"."
+    "Remember to put your answer inside \\boxed{{}}."
 )
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
