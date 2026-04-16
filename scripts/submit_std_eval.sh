@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
-# Submit HumanEval + MBPP with EvalPlus standard prompt.
-#   Both use the same EvalPlus prompt format (zero-shot):
-#     "Please provide a self-contained Python script..."
-#   This is the exact format used by LLaMA 3.1, Qwen2.5-Coder,
-#   DeepSeek-Coder V2 on the EvalPlus leaderboard.
+# Submit standard evaluations aligned with LLaMA 3.1 / lm-eval-harness.
 #
-# Same hyper-params as best_eval: LowProb τ=0.3, C=1, ρ=0.25
-# Shard size ≤ 32, single GPU per job.
+# Datasets & their standard settings:
+#   humaneval  - EvalPlus zero-shot, gen_length=768
+#   mbpp       - EvalPlus zero-shot, gen_length=768
+#   bbh        - 3-shot CoT (BIG-Bench-Hard standard prompts), gen_length=1024
+#   mmlu_pro   - 5-shot CoT (per-category from validation), gen_length=2048
+#   drop       - 3-shot (from training split), gen_length=256
+#   triviaqa   - 5-shot (from training split), gen_length=128
+#
+# Hyper-params: LowProb τ=0.3, C=1, ρ=0.25
+# Single GPU per job, shard size ≤ MAX_PER_SHARD.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -18,16 +22,39 @@ TAG="lowprob_t0.3_c1_r0.25"
 declare -A DS_TOTAL=(
   [humaneval]=164
   [mbpp]=378
+  [bbh]=6511
+  [mmlu_pro]=12032
+  [drop]=9536
+  [triviaqa]=17944
 )
 
-MAX_PER_SHARD=32
+declare -A DS_SHARD_SIZE=(
+  [humaneval]=32
+  [mbpp]=32
+  [bbh]=128
+  [mmlu_pro]=128
+  [drop]=128
+  [triviaqa]=128
+)
+
+declare -A DS_TIMEOUT=(
+  [humaneval]=10800
+  [mbpp]=10800
+  [bbh]=14400
+  [mmlu_pro]=21600
+  [drop]=10800
+  [triviaqa]=10800
+)
+
 SUBMITTED=0
 
-for DATASET in humaneval mbpp; do
+for DATASET in humaneval mbpp bbh mmlu_pro drop triviaqa; do
   TOTAL=${DS_TOTAL[$DATASET]}
+  MAX_PER_SHARD=${DS_SHARD_SIZE[$DATASET]}
+  TIMEOUT=${DS_TIMEOUT[$DATASET]}
   NUM_SHARDS=$(( (TOTAL + MAX_PER_SHARD - 1) / MAX_PER_SHARD ))
 
-  echo "=== ${DATASET}_std: ${TOTAL} samples, ${NUM_SHARDS} shards ==="
+  echo "=== ${DATASET}_std: ${TOTAL} samples, ${NUM_SHARDS} shards (shard≤${MAX_PER_SHARD}), timeout=${TIMEOUT}s ==="
 
   for ((S=0; S<NUM_SHARDS; S++)); do
     for MODE in original remask; do
@@ -56,7 +83,7 @@ TaskRoleSpecs:
   - RoleName: "worker"
     RoleReplicas: 1
     Flavor: "ml.pni2.3xlarge"
-ActiveDeadlineSeconds: 10800
+ActiveDeadlineSeconds: ${TIMEOUT}
 DelayExitTimeSeconds: 0
 AccessType: "Private"
 Preemptible: true
