@@ -1,7 +1,11 @@
 """DROP with 3-shot (LLaMA 3.1 / lm-evaluation-harness standard).
 
-Uses 3 examples from training split as few-shot demonstrations.
-Format: "{passage} {question}{answer}" matching lm-eval-harness (target_delimiter="", no separator).
+Gold answers and F1/EM metrics are *exactly* aligned with
+lm-evaluation-harness `lm_eval/tasks/drop/utils.py`:
+  - Gold set = answer + validated_answers (parsed via parse_answer)
+  - F1 uses bag-of-words alignment (_align_bags, _match_numbers_if_present)
+  - Normalize = lower → remove punc (keep numbers) → remove articles → strip
+Few-shot target = first gold tuple joined with "," (matching doc_to_target).
 
 python -m eval.drop_std --mode remask --strategy low_prob --remask_threshold 0.3
 """
@@ -9,10 +13,14 @@ python -m eval.drop_std --mode remask --strategy low_prob --remask_threshold 0.3
 import argparse
 import json
 import os
+import re
+import string
 import remask.env  # noqa: F401
 import time
 
+import numpy as np
 from datasets import load_dataset
+from scipy.optimize import linear_sum_assignment
 from tqdm import tqdm
 
 from remask import load_remask_model, load_original_model
@@ -20,36 +28,172 @@ from remask.utils import (
     format_chat_prompt,
     tokenize_prompt,
     extract_short_answer,
-    compute_f1,
-    compute_em,
-    max_metric_over_answers,
 )
 from eval.common import (
     add_parallel_args, shard_dataset, _attach_gen_stats,
     aggregate_gen_stats, gen_params_dict, gen_kwargs, get_gen_stats,
 )
 
+# ---------------------------------------------------------------------------
+# lm-eval-harness DROP metric helpers  (verbatim from lm_eval/tasks/drop/utils.py)
+# ---------------------------------------------------------------------------
+_ARTICLES = re.compile(r"\b(a|an|the)\b", re.UNICODE)
+
+
+def _is_number(text):
+    try:
+        float(text)
+        return True
+    except ValueError:
+        return False
+
+
+def _remove_articles(text):
+    return _ARTICLES.sub(" ", text)
+
+
+def _white_space_fix(text):
+    return " ".join(text.split())
+
+
+def _remove_punc(text):
+    exclude = set(string.punctuation)
+    if not _is_number(text):
+        return "".join(ch for ch in text if ch not in exclude)
+    else:
+        return text
+
+
+def _fix_number(text):
+    return str(float(text)) if _is_number(text) else text
+
+
+def _tokenize(text):
+    return re.split(" |-", text)
+
+
+def _normalize(answer):
+    tokens = [
+        _white_space_fix(_remove_articles(_fix_number(_remove_punc(token.lower()))))
+        for token in _tokenize(answer)
+    ]
+    tokens = [token for token in tokens if token.strip()]
+    return " ".join(tokens).strip()
+
+
+def _answer_to_bags(answer):
+    if isinstance(answer, (list, tuple)):
+        raw_spans = answer
+    else:
+        raw_spans = [answer]
+    normalized_spans = []
+    token_bags = []
+    for raw_span in raw_spans:
+        normalized_span = _normalize(raw_span)
+        normalized_spans.append(normalized_span)
+        token_bags.append(set(normalized_span.split()))
+    return normalized_spans, token_bags
+
+
+def _compute_f1(predicted_bag, gold_bag):
+    intersection = len(gold_bag.intersection(predicted_bag))
+    precision = 1.0 if not predicted_bag else intersection / float(len(predicted_bag))
+    recall = 1.0 if not gold_bag else intersection / float(len(gold_bag))
+    if precision == 0.0 and recall == 0.0:
+        return 0.0
+    return (2 * precision * recall) / (precision + recall)
+
+
+def _match_numbers_if_present(gold_bag, predicted_bag):
+    gold_numbers = {w for w in gold_bag if _is_number(w)}
+    predicted_numbers = {w for w in predicted_bag if _is_number(w)}
+    if (not gold_numbers) or gold_numbers.intersection(predicted_numbers):
+        return True
+    return False
+
+
+def _align_bags(predicted, gold):
+    scores = np.zeros([len(gold), len(predicted)])
+    for gi, g_item in enumerate(gold):
+        for pi, p_item in enumerate(predicted):
+            if _match_numbers_if_present(g_item, p_item):
+                scores[gi, pi] = _compute_f1(p_item, g_item)
+    row_ind, col_ind = linear_sum_assignment(-scores)
+    max_scores = np.zeros([max(len(gold), len(predicted))])
+    for row, column in zip(row_ind, col_ind):
+        max_scores[row] = max(max_scores[row], scores[row, column])
+    return max_scores
+
+
+def _drop_get_metrics(predicted, gold):
+    """Exact lm-eval-harness get_metrics: returns (em, f1)."""
+    predicted_bags = _answer_to_bags(predicted)
+    gold_bags = _answer_to_bags(gold)
+    if (set(predicted_bags[0]) == set(gold_bags[0])
+            and len(predicted_bags[0]) == len(gold_bags[0])):
+        exact_match = 1.0
+    else:
+        exact_match = 0.0
+    f1_per_bag = _align_bags(predicted_bags[1], gold_bags[1])
+    f1 = round(float(np.mean(f1_per_bag)), 2)
+    return exact_match, f1
+
+
+# ---------------------------------------------------------------------------
+# lm-eval-harness gold-answer extraction  (verbatim logic)
+# ---------------------------------------------------------------------------
+
+def _parse_answer(answer):
+    if answer["number"] != "":
+        return (str(answer["number"]),)
+    if answer["spans"] != []:
+        return tuple(answer["spans"])
+    return (
+        " ".join(
+            [answer["date"]["day"], answer["date"]["month"], answer["date"]["year"]]
+        ).strip(),
+    )
+
+
+def _flatten_validated_answers(validated_answers):
+    valid = []
+    for i in range(len(validated_answers["number"])):
+        valid.append({
+            "number": validated_answers["number"][i],
+            "date": validated_answers["date"][i],
+            "spans": validated_answers["spans"][i],
+        })
+    return valid
+
+
+def _get_all_answers(doc):
+    """Replicate lm-eval-harness get_answers: answer + validated_answers."""
+    answers = []
+    answers_set = set()
+    candidates = [doc["answer"]] + _flatten_validated_answers(doc["validated_answers"])
+    for candidate in candidates:
+        answer = _parse_answer(candidate)
+        if answer in answers_set:
+            continue
+        answers_set.add(answer)
+        answers.append(answer)
+    return answers
+
+
+# ---------------------------------------------------------------------------
 N_FEWSHOT = 3
 _fewshot_prefix = None
-
-
-def _gold_spans(ex):
-    asp = ex.get("answers_spans") or {}
-    spans = asp.get("spans")
-    if spans is None:
-        return []
-    return list(spans)
 
 
 def _load_fewshot():
     global _fewshot_prefix
     if _fewshot_prefix is not None:
         return
-    ds = load_dataset("drop", split=f"train[:{N_FEWSHOT}]")
+    ds = load_dataset("EleutherAI/drop", split=f"train[:{N_FEWSHOT}]")
     parts = []
     for ex in ds:
-        gold = _gold_spans(ex)
-        ans = gold[0] if gold else ""
+        gold = _get_all_answers(ex)
+        ans = ",".join(gold[0]) if gold else ""
         parts.append(f"{ex['passage']} {ex['question']}{ans}")
     _fewshot_prefix = "\n\n".join(parts) + "\n\n"
     print(f"Loaded {N_FEWSHOT} DROP fewshot examples")
@@ -62,13 +206,20 @@ def run_tag(args):
 
 
 def _eval_one(resp, ex):
-    gold = _gold_spans(ex)
+    """Score using lm-eval-harness process_results logic."""
+    golds = _get_all_answers(ex)
     pred = extract_short_answer(resp)
-    em_val = max_metric_over_answers(pred, gold, compute_em) if gold else 0.0
-    f1_val = max_metric_over_answers(pred, gold, compute_f1) if gold else 0.0
+    max_em = 0.0
+    max_f1 = 0.0
+    for gold_answer in golds:
+        if gold_answer[0].strip():
+            em, f1 = _drop_get_metrics(pred, gold_answer)
+            max_em = max(max_em, em)
+            max_f1 = max(max_f1, f1)
+    gold_display = [",".join(g) for g in golds]
     return dict(
-        passage=ex["passage"], question=ex["question"], gold=gold,
-        predicted=pred, em=em_val, f1=f1_val, correct=(em_val >= 1.0 - 1e-9),
+        passage=ex["passage"], question=ex["question"], gold=gold_display,
+        predicted=pred, em=max_em, f1=max_f1, correct=(max_em >= 1.0 - 1e-9),
     )
 
 
@@ -93,9 +244,9 @@ def _flush(summary_path, tag, args, results, t0, batch_size, done=False):
 
 
 def _load_drop_split():
-    for name, split in [("drop", "validation"), ("ucinlp/drop", "validation")]:
+    for name in ["EleutherAI/drop", "drop", "ucinlp/drop"]:
         try:
-            return load_dataset(name, split=split)
+            return load_dataset(name, split="validation")
         except Exception as e:
             print(f"  load_dataset({name!r}) failed: {e}")
     raise RuntimeError("Could not load DROP validation split")
