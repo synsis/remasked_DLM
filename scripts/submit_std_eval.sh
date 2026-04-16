@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Submit standard evaluations aligned with LLaMA 3.1 / lm-eval-harness.
+# Submit standard-aligned evaluations.
 #
-# Datasets & their standard settings:
-#   humaneval  - EvalPlus zero-shot, gen_length=768
-#   mbpp       - EvalPlus zero-shot, gen_length=768
-#   bbh        - 3-shot CoT (BIG-Bench-Hard standard prompts), gen_length=1024
-#   mmlu_pro   - 5-shot CoT (per-category from validation), gen_length=2048
-#   drop       - 3-shot (from training split), gen_length=256
-#   triviaqa   - 5-shot (from training split), gen_length=128
+# All benchmarks aligned with LLaMA 3.1 / lm-eval-harness / EvalPlus:
+#   humaneval  - EvalPlus zero-shot, gen=768
+#   mbpp       - EvalPlus zero-shot, gen=768
+#   bbh        - 3-shot CoT (BIG-Bench-Hard), gen=1024
+#   mmlu_pro   - 5-shot CoT per-category, gen=2048
+#   drop       - 3-shot, gen=256
+#   triviaqa   - 5-shot, gen=128
 #
 # Hyper-params: LowProb τ=0.3, C=1, ρ=0.25
-# Single GPU per job, shard size ≤ MAX_PER_SHARD.
+# Shard ≤ 32, bsz=1, single GPU.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -18,6 +18,7 @@ VOLC=~/.volc/bin/volc
 TMP=/tmp/_std_eval.yml
 
 TAG="lowprob_t0.3_c1_r0.25"
+MAX_PER_SHARD=32
 
 declare -A DS_TOTAL=(
   [humaneval]=164
@@ -26,15 +27,6 @@ declare -A DS_TOTAL=(
   [mmlu_pro]=12032
   [drop]=9536
   [triviaqa]=17944
-)
-
-declare -A DS_SHARD_SIZE=(
-  [humaneval]=32
-  [mbpp]=32
-  [bbh]=128
-  [mmlu_pro]=128
-  [drop]=128
-  [triviaqa]=128
 )
 
 declare -A DS_TIMEOUT=(
@@ -50,18 +42,17 @@ SUBMITTED=0
 
 for DATASET in humaneval mbpp bbh mmlu_pro drop triviaqa; do
   TOTAL=${DS_TOTAL[$DATASET]}
-  MAX_PER_SHARD=${DS_SHARD_SIZE[$DATASET]}
   TIMEOUT=${DS_TIMEOUT[$DATASET]}
   NUM_SHARDS=$(( (TOTAL + MAX_PER_SHARD - 1) / MAX_PER_SHARD ))
 
-  echo "=== ${DATASET}_std: ${TOTAL} samples, ${NUM_SHARDS} shards (shard≤${MAX_PER_SHARD}), timeout=${TIMEOUT}s ==="
+  echo "=== ${DATASET}: ${TOTAL} samples, ${NUM_SHARDS} shards, timeout=${TIMEOUT}s ==="
 
   for ((S=0; S<NUM_SHARDS; S++)); do
     for MODE in original remask; do
       TASK_NAME="std-${DATASET}-${MODE}-s${S}of${NUM_SHARDS}"
       TASK_NAME=$(echo "$TASK_NAME" | tr '.' 'd' | head -c 60)
 
-      OUT_DIR="results_v2/best_eval_std/${DATASET}/${TAG}"
+      OUT_DIR="results_std/${DATASET}/${TAG}"
       if [ "$MODE" = "original" ]; then
         ls "${OUT_DIR}"/original*shard${S}_summary.json &>/dev/null && { echo "  [$S] $MODE SKIP"; continue; }
       else

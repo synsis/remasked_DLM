@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# Run one shard of humaneval_std / mbpp_std with standard open-source prompts.
-# - humaneval_std: zero-shot, raw function signature (no extra instruction)
-# - mbpp_std: 3-shot, lm-evaluation-harness format
+# Run one shard of standard-aligned evaluation.
+#
+# Datasets supported (all use eval.{DATASET}_std module):
+#   humaneval  - EvalPlus zero-shot, gen_length=768
+#   mbpp       - EvalPlus zero-shot, gen_length=768
+#   bbh        - 3-shot CoT, gen_length=1024
+#   mmlu_pro   - 5-shot CoT, gen_length=2048
+#   drop       - 3-shot, gen_length=256
+#   triviaqa   - 5-shot, gen_length=128
 #
 # Usage: bash run_std_eval_single.sh <dataset> <shard_id> <num_shards> <mode> [bsz]
-#
-# Setting: LowProb τ=0.3, C_max=1, ρ_max=0.25  (same as best_eval)
 set -euo pipefail
 cd /vepfs-mlp2/c20250506/251105017/yaolin/LLADA_pretraining/new_llada2.1_infer_remask
 
@@ -27,10 +31,10 @@ C_MAX="1"
 RHO="0.25"
 TAG="lowprob_t${TAU}_c${C_MAX}_r${RHO}"
 
-OUT_DIR="results_v2/best_eval_std/${DATASET}/${TAG}"
+OUT_DIR="results_std/${DATASET}/${TAG}"
 mkdir -p "$OUT_DIR"
 
-echo "Dataset: ${DATASET} (std prompt), Shard: ${SHARD_ID}/${NUM_SHARDS}, Mode: ${MODE}, BSZ: ${BSZ}"
+echo "Dataset: ${DATASET} (std), Shard: ${SHARD_ID}/${NUM_SHARDS}, Mode: ${MODE}, BSZ: ${BSZ}"
 echo "Output: ${OUT_DIR}"
 
 EXTRA=""
@@ -38,7 +42,6 @@ if [ "$MODE" = "remask" ]; then
   EXTRA="--strategy $STRATEGY --remask_threshold $TAU --max_remask_per_pos $C_MAX --max_remask_ratio $RHO"
 fi
 
-# Map dataset name to the standard eval module
 EVAL_MODULE="eval.${DATASET}_std"
 
 conda run -n remask python -u -m ${EVAL_MODULE} \

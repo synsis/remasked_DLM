@@ -1,7 +1,7 @@
 """DROP with 3-shot (LLaMA 3.1 / lm-evaluation-harness standard).
 
 Uses 3 examples from training split as few-shot demonstrations.
-Format: "{passage} {question}{answer}" matching lm-eval-harness (target_delimiter="").
+Format: "{passage} {question}{answer}" matching lm-eval-harness (target_delimiter="", no separator).
 
 python -m eval.drop_std --mode remask --strategy low_prob --remask_threshold 0.3
 """
