@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Submit HumanEval + MBPP with standard open-source prompts.
-#   humaneval_std: zero-shot, raw function signature (no extra instruction)
-#   mbpp_std: 3-shot, lm-evaluation-harness format
+# Submit HumanEval + MBPP with EvalPlus standard prompt.
+#   Both use the same EvalPlus prompt format (zero-shot):
+#     "Please provide a self-contained Python script..."
+#   This is the exact format used by LLaMA 3.1, Qwen2.5-Coder,
+#   DeepSeek-Coder V2 on the EvalPlus leaderboard.
 #
 # Same hyper-params as best_eval: LowProb τ=0.3, C=1, ρ=0.25
 # Shard size ≤ 32, single GPU per job.
@@ -15,7 +17,7 @@ TAG="lowprob_t0.3_c1_r0.25"
 
 declare -A DS_TOTAL=(
   [humaneval]=164
-  [mbpp]=375
+  [mbpp]=378
 )
 
 MAX_PER_SHARD=32

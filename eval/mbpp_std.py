@@ -1,118 +1,84 @@
 """
-Standard 3-shot MBPP evaluation following lm-evaluation-harness format.
+Standard MBPP evaluation matching EvalPlus format exactly.
 
-Prompt template (per lm-evaluation-harness mbpp.yaml):
-  You are an expert Python programmer, and here is your task: {text}
-  Your code should pass these tests:
+Same prompt as HumanEval (zero-shot, EvalPlus style):
+  <user>
+  Please provide a self-contained Python script that solves the following
+  problem in a markdown code block:
+  ```
+  {MBPP prompt (docstring with assertions)}
+  ```
+  </user>
+  <assistant>
+  Below is a Python script with a self-contained function that solves the
+  problem and passes corresponding tests:
+  ```python
+  {model generates here}
 
-  {test0}
-  {test1}
-  {test2}
-  [BEGIN]
-  {code}     <-- only in few-shot examples
-  [DONE]     <-- only in few-shot examples
-
-3 few-shot examples (tasks 2, 3, 4) are prepended.
+This is the exact same prompt that Meta LLaMA 3.1, Qwen2.5-Coder,
+DeepSeek-Coder V2, etc. are evaluated with on the EvalPlus leaderboard.
 
 python -m eval.mbpp_std --mode remask --strategy low_prob --remask_threshold 0.3
+# then: evalplus.evaluate --dataset mbpp --samples <samples.jsonl>
 """
 
 import argparse
 import json
 import os
-import re
 import time
 
 import torch
 from tqdm import tqdm
 
 from remask import load_remask_model, load_original_model
-from remask.utils import format_chat_prompt, tokenize_prompt, extract_code_block
+from remask.utils import tokenize_prompt
 from eval.common import add_parallel_args, output_paths, gen_params_dict
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 
-FEWSHOT_EXAMPLES = [
-    {
-        "text": "Write a function to find the similar elements from the given two tuple lists.",
-        "code": (
-            "def similar_elements(test_tup1, test_tup2):\r\n"
-            "  res = tuple(set(test_tup1) & set(test_tup2))\r\n"
-            "  return (res) "
-        ),
-        "test_list": [
-            "assert similar_elements((3, 4, 5, 6),(5, 7, 4, 10)) == (4, 5)",
-            "assert similar_elements((1, 2, 3, 4),(5, 4, 3, 7)) == (3, 4)",
-            "assert similar_elements((11, 12, 14, 13),(17, 15, 14, 13)) == (13, 14)",
-        ],
-    },
-    {
-        "text": "Write a python function to identify non-prime numbers.",
-        "code": (
-            "import math\r\n"
-            "def is_not_prime(n):\r\n"
-            "    result = False\r\n"
-            "    for i in range(2,int(math.sqrt(n)) + 1):\r\n"
-            "        if n % i == 0:\r\n"
-            "            result = True\r\n"
-            "    return result"
-        ),
-        "test_list": [
-            "assert is_not_prime(2) == False",
-            "assert is_not_prime(10) == True",
-            "assert is_not_prime(35) == True",
-        ],
-    },
-    {
-        "text": "Write a function to find the largest integers from a given list of numbers using heap queue algorithm.",
-        "code": (
-            "import heapq as hq\r\n"
-            "def heap_queue_largest(nums,n):\r\n"
-            "  largest_nums = hq.nlargest(n, nums)\r\n"
-            "  return largest_nums"
-        ),
-        "test_list": [
-            "assert heap_queue_largest( [25, 35, 22, 85, 14, 65, 75, 22, 58],3)==[85, 75, 65] ",
-            "assert heap_queue_largest( [25, 35, 22, 85, 14, 65, 75, 22, 58],2)==[85, 75] ",
-            "assert heap_queue_largest( [25, 35, 22, 85, 14, 65, 75, 22, 58],5)==[85, 75, 65, 58, 35]",
-        ],
-    },
+INSTRUCTION_PREFIX = (
+    "Please provide a self-contained Python script that solves the following "
+    "problem in a markdown code block:"
+)
+RESPONSE_PREFIX = (
+    "Below is a Python script with a self-contained function that solves "
+    "the problem and passes corresponding tests:"
+)
+
+_MAGIC_SPLITTER_ = "-[[]]-this-is-really-our-highest-priority-[[]]-"
+
+CHAT_EOS = [
+    "\n```\n",
+    "\nif __name__",
+    "\ndef main(",
+    "\nprint(",
 ]
 
 
-def _format_one(text, test_list):
-    tests = "\n".join(test_list)
-    return (
-        f"You are an expert Python programmer, and here is your task: {text} "
-        f"Your code should pass these tests:\n\n{tests}\n[BEGIN]\n"
+def _truncate_eos(text):
+    """Truncate at the first EOS marker, matching EvalPlus behavior."""
+    min_idx = len(text)
+    for eos in CHAT_EOS:
+        idx = text.find(eos)
+        if idx != -1 and idx < min_idx:
+            min_idx = idx
+    return text[:min_idx].replace("\t", "    ")
+
+
+def _make_evalplus_prompt(task_prompt, tokenizer):
+    """Build the EvalPlus-style chat prompt with assistant prefill."""
+    user_msg = f"{INSTRUCTION_PREFIX}\n```\n{task_prompt.strip()}\n```"
+    assistant_msg = f"{RESPONSE_PREFIX}\n```python\n{_MAGIC_SPLITTER_}\n```"
+
+    full = tokenizer.apply_chat_template(
+        [
+            {"role": "user", "content": user_msg},
+            {"role": "assistant", "content": assistant_msg},
+        ],
+        tokenize=False,
     )
-
-
-def _build_fewshot_prefix():
-    parts = []
-    for ex in FEWSHOT_EXAMPLES:
-        prompt = _format_one(ex["text"], ex["test_list"])
-        parts.append(f"{prompt}{ex['code']}\n[DONE]\n\n")
-    return "".join(parts)
-
-
-FEWSHOT_PREFIX = _build_fewshot_prefix()
-
-
-def _parse_prompt_field(prompt_str):
-    """Parse MbppPlus `prompt` docstring into (text, test_list)."""
-    body = prompt_str.strip().strip('"""').strip()
-    lines = body.split("\n")
-    text_lines, tests = [], []
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("assert "):
-            tests.append(stripped)
-        else:
-            if not tests:
-                text_lines.append(stripped)
-    text = " ".join(t for t in text_lines if t)
-    return text, tests
+    prompt = full.split(_MAGIC_SPLITTER_)[0]
+    return prompt
 
 
 def load_mbpp():
@@ -134,27 +100,18 @@ def run_tag(args):
     return f"remask_{args.strategy}_{args.remask_threshold}"
 
 
-def _extract_solution(full_output):
-    """Extract code from the model response.
-
-    Priority:
-    1. [BEGIN]...[DONE] markers (lm-eval-harness style)
-    2. Markdown ```python ... ``` code block
-    3. Raw output as fallback
-    """
-    begin_idx = full_output.rfind("[BEGIN]")
-    if begin_idx != -1:
-        code_start = begin_idx + len("[BEGIN]")
-        done_idx = full_output.find("[DONE]", code_start)
-        if done_idx == -1:
-            return full_output[code_start:].strip()
-        return full_output[code_start:done_idx].strip()
-
-    code = extract_code_block(full_output)
-    if code != full_output:
-        return code
-
-    return full_output.strip()
+def _sanitize_solution(raw_output, entry_point):
+    """Apply EvalPlus sanitize if available, else basic extraction."""
+    try:
+        from evalplus.sanitize import sanitize
+        return sanitize(raw_output, entrypoint=entry_point)
+    except ImportError:
+        pass
+    import re
+    m = re.search(r"```(?:python)?\s*\n(.*?)```", raw_output, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    return raw_output.strip()
 
 
 def run(args):
@@ -170,12 +127,7 @@ def run(args):
             max_remask_ratio=getattr(args, "max_remask_ratio", 0.25))
 
     problems = load_mbpp()
-    print(f"MBPP+ (std 3-shot): {len(problems)} problems")
-
-    fewshot_ids = {"Mbpp/2", "Mbpp/3", "Mbpp/4"}
-    problems = {k: v for k, v in problems.items() if k not in fewshot_ids}
-    print(f"  after excluding few-shot examples: {len(problems)} problems")
-
+    print(f"MBPP+ (EvalPlus std): {len(problems)} problems")
     if args.num_shards > 1:
         keys = [k for i, k in enumerate(problems) if i % args.num_shards == args.shard_id]
         problems = {k: problems[k] for k in keys}
@@ -191,14 +143,7 @@ def run(args):
     t0 = time.time()
 
     for tid, prob in tqdm(problems.items(), desc=f"MBPP+ std [{tag}]"):
-        text, test_list = _parse_prompt_field(prob["prompt"])
-        if not test_list:
-            assertion = prob.get("assertion", "")
-            test_list = [l.strip() for l in assertion.strip().split("\n") if l.strip().startswith("assert")]
-            test_list = test_list[:3]
-
-        query = FEWSHOT_PREFIX + _format_one(text, test_list)
-        prompt = format_chat_prompt(query, tokenizer)
+        prompt = _make_evalplus_prompt(prob["prompt"], tokenizer)
         ids = tokenize_prompt(prompt, tokenizer, model.device)
 
         out = model.generate(
@@ -207,18 +152,19 @@ def run(args):
             editing_threshold=args.editing_threshold,
             temperature=args.temperature, mask_id=mask_id, eos_early_stop=True,
         )
-        comp = tokenizer.decode(out[0], skip_special_tokens=True)
-        sol = _extract_solution(comp)
+        raw = tokenizer.decode(out[0], skip_special_tokens=True)
+        impl = _truncate_eos(raw)
+        sol = _sanitize_solution(impl, prob["entry_point"])
 
         samples.append({"task_id": tid, "solution": sol})
-        results.append({"task_id": tid, "solution": sol, "correct": None})
+        results.append({"task_id": tid, "solution": sol, "raw": raw, "correct": None})
 
     elapsed = time.time() - t0
     print(f"Done in {elapsed:.0f}s ({elapsed/len(results):.1f}s/prob)")
 
     with open(samples_path, "w") as f:
-        for r in samples:
-            f.write(json.dumps(r) + "\n")
+        for s in samples:
+            f.write(json.dumps(s) + "\n")
     with open(results_path, "w") as f:
         for r in results:
             f.write(json.dumps(r) + "\n")
@@ -227,14 +173,13 @@ def run(args):
         benchmark="mbpp_std", tag=tag, mode=args.mode,
         total=len(results), time_s=elapsed,
         done=True, needs_evalplus=True,
-        prompt_format="3-shot lm-eval-harness",
+        prompt_format="evalplus_standard",
         **gen_params_dict(args),
     )
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
 
     print(f"Saved → {samples_path}")
-    print(f"Saved → {results_path}")
     print(f"Evaluate: evalplus.evaluate --dataset mbpp --samples {samples_path}")
 
 
@@ -245,7 +190,7 @@ if __name__ == "__main__":
     p.add_argument("--strategy", choices=["low_prob", "t2t_remask", "logit_diff"], default="low_prob")
     p.add_argument("--remask_threshold", type=float, default=None)
     p.add_argument("--output_dir", default="results/mbpp_std")
-    p.add_argument("--gen_length", type=int, default=16384)
+    p.add_argument("--gen_length", type=int, default=768)
     p.add_argument("--block_length", type=int, default=32)
     p.add_argument("--steps", type=int, default=32)
     p.add_argument("--threshold", type=float, default=0.7)
