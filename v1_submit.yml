@@ -7,7 +7,7 @@ Storages:
 
 Entrypoint: "
 cd /vepfs-mlp2/c20250506/251105017/yaolin/new_llada2.1_infer_remask
-export HF_TOKEN=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
+export HF_TOKEN=${HF_TOKEN}
 bash run_eval_8gpu2.sh bbh 4 0 remask
 "
 

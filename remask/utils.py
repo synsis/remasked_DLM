@@ -105,25 +105,47 @@ def normalize_math_answer(s):
 # ---------------------------------------------------------------------------
 
 def extract_choice_answer(text, n_choices=10):
-    """Extract letter answer from model response."""
-    max_letter = chr(ord("A") + n_choices - 1)
-    pat = rf"[A-{max_letter}a-{max_letter.lower()}]"
+    """Extract letter answer from model response.
 
-    m = re.search(rf"[Tt]he answer is\s*\(?({pat})\)?", text)
+    Patterns ordered most-specific → least-specific.  ``re.IGNORECASE`` is
+    intentionally NOT used so that ``[A-J]`` never accidentally matches a
+    lowercase letter inside a word (e.g. 'i' from 'is').
+    """
+    max_letter = chr(ord("A") + n_choices - 1)
+    lo = max_letter.lower()
+    L = rf"[A-{max_letter}a-{lo}]"          # upper or lower answer letter
+    # Optional markdown bold / parens wrapper around a letter
+    W = rf"\*{{0,2}}\(?({L})\)?\*{{0,2}}"
+
+    # 1. "[Tt]he answer is (X)" — lm-eval-harness style
+    m = re.search(rf"[Tt]he answer is\s*" + W, text)
     if m:
         return m.group(1).upper()
-    m = re.search(rf"答案是\s*[（(]?({pat})[）)]?", text)
+    # 2. "answer is (X)" — without "The" prefix
+    m = re.search(rf"[Aa]nswer is\s*" + W, text)
     if m:
         return m.group(1).upper()
-    m = re.search(rf"(?:answer|选)[：:\s]*\(?({pat})\)?", text, re.IGNORECASE)
+    # 3. "Final Answer: X" / "Answer: X"
+    m = re.search(rf"[Ff]inal\s+[Aa]nswer[：:\s]+" + W, text)
     if m:
         return m.group(1).upper()
-    m = re.search(rf"(?:^|\n)\s*({pat})\s*$", text.strip())
+    m = re.search(rf"[Aa]nswer[：:]\s*" + W, text)
     if m:
         return m.group(1).upper()
-    m = re.search(rf"\b({pat})\.", text)
+    # 4. Chinese: 答案是X
+    m = re.search(rf"答案是\s*[（(]?({L})[）)]?", text)
     if m:
         return m.group(1).upper()
+    # 5. "Option X" / "option X is correct"
+    m = re.search(rf"[Oo]ption\s+" + W, text)
+    if m:
+        return m.group(1).upper()
+    # 6. Standalone letter on its own line (prefer last match)
+    last = None
+    for m in re.finditer(rf"(?:^|\n)\s*" + W + rf"\s*$", text, re.MULTILINE):
+        last = m
+    if last:
+        return last.group(1).upper()
     return ""
 
 

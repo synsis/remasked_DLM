@@ -4,8 +4,8 @@
 # All benchmarks aligned with LLaMA 3.1 / lm-eval-harness / EvalPlus:
 #   humaneval  - EvalPlus zero-shot, gen=768
 #   mbpp       - EvalPlus zero-shot, gen=768
-#   bbh        - 3-shot CoT (BIG-Bench-Hard), gen=1024
-#   mmlu_pro   - 5-shot CoT per-category, gen=2048
+#   bbh        - 3-shot CoT (BIG-Bench-Hard), gen=16384
+#   mmlu_pro   - 5-shot CoT per-category, gen=16384
 #   drop       - 3-shot, gen=256
 #   triviaqa   - 5-shot, gen=128
 #
@@ -65,7 +65,7 @@ Storages:
   - Type: "Vepfs"
     MountPath: "/vepfs-mlp2/c20250506/251105017"
     SubPath: "/c20250506/251105017"
-Entrypoint: "cd /vepfs-mlp2/c20250506/251105017/yaolin/LLADA_pretraining/new_llada2.1_infer_remask && export HF_TOKEN=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 && bash scripts/run_std_eval_single.sh ${DATASET} ${S} ${NUM_SHARDS} ${MODE} 1"
+Entrypoint: "cd /vepfs-mlp2/c20250506/251105017/yaolin/LLADA_pretraining/new_llada2.1_infer_remask && bash scripts/run_std_eval_single.sh ${DATASET} ${S} ${NUM_SHARDS} ${MODE} 1"
 Tags: [LLM, yl, llada, remask, std-eval]
 ImageUrl: "cr-mlp-cn-beijing.cr.volces.com/public/yl_dllm:1.0"
 Framework: "Custom"

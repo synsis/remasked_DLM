@@ -15,7 +15,7 @@ cd /vepfs-mlp2/c20250506/251105017/yaolin/LLADA_pretraining/new_llada2.1_infer_r
 
 export https_proxy="100.68.162.212:3128"
 export http_proxy="100.68.162.212:3128"
-export HF_TOKEN="${HF_TOKEN:-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}"
+export HF_TOKEN="${HF_TOKEN:-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}"
 export HF_ENDPOINT="https://huggingface.co"
 export HUGGINGFACE_HUB_ENDPOINT="https://huggingface.co"
 
@@ -40,6 +40,17 @@ echo "Output: ${OUT_DIR}"
 EXTRA=""
 if [ "$MODE" = "remask" ]; then
   EXTRA="--strategy $STRATEGY --remask_threshold $TAU --max_remask_per_pos $C_MAX --max_remask_ratio $RHO"
+fi
+
+# drop_std needs scipy.optimize.linear_sum_assignment for DROP F1 bag alignment.
+# Install from local vepfs wheels first, fall back to PyPI if wheel does not match.
+if [ "$DATASET" = "drop" ]; then
+  if ! conda run -n remask python -c "import scipy" 2>/dev/null; then
+    echo "Installing scipy (for DROP)..."
+    WHEEL_DIR="/vepfs-mlp2/c20250506/251105017/yaolin/LLADA_pretraining/new_llada2.1_infer_remask/wheels"
+    conda run -n remask pip install --no-deps --find-links "$WHEEL_DIR" scipy 2>&1 | tail -5 \
+      || conda run -n remask pip install --no-deps scipy 2>&1 | tail -5
+  fi
 fi
 
 EVAL_MODULE="eval.${DATASET}_std"
